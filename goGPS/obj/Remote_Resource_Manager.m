@@ -12,7 +12,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
@@ -45,11 +45,8 @@ classdef Remote_Resource_Manager < Ini_Manager
     end
     
     properties (Access = private)
-        local_storage = ''
-    end
-    
-    properties (Access = private)
-        log
+        local_storage = '';
+        credentials; 
     end
     
     % =========================================================================
@@ -85,7 +82,21 @@ classdef Remote_Resource_Manager < Ini_Manager
             end            
             
             this.readFile();
-            this.log = Core.getLogger();
+            credentials_path = [Core.getInstallDir filesep 'credentials.txt'];
+            if exist(credentials_path, 'file') == 0
+                Core.getLogger.addError('The "credentials.txt" file is missing.\nIt will be created as empty from "credentials.example.txt" in goGPS folder');
+                try
+                    credentials_default_path = [Core.getInstallDir filesep 'credentials.example.txt'];
+                    copyfile(credentials_default_path, credentials_path);
+                    this.credentials = Ini_Manager(credentials_path);
+                    this.credentials.readFile();
+                catch
+                    this.credentials = Ini_Manager();
+                end
+            else
+                this.credentials = Ini_Manager(credentials_path);            
+                this.credentials.readFile();
+            end
         end
     end
 
@@ -137,7 +148,7 @@ classdef Remote_Resource_Manager < Ini_Manager
     end
     
     methods        
-        function [ip, port] = getServerIp(this, name)
+        function [ip, port, user, passwd] = getServerIp(this, name)
             % Return the ip of a server given the server name
             %
             % SYNTAX:
@@ -147,6 +158,9 @@ classdef Remote_Resource_Manager < Ini_Manager
             ip_port = this.getData('SERVER', name);
             ip = ip_port{1};
             port = ip_port{2};
+            this.credentials.readFile(); % read every time for updated credentials
+            user = this.credentials.getData(name,'username');
+            passwd = this.credentials.getData(name,'password');
         end
         
         function f_struct = getFileLoc(this, file_name)
@@ -199,25 +213,33 @@ classdef Remote_Resource_Manager < Ini_Manager
             %                         found the resource
             %          
             
-            % Check if the requested resource is iono            
+            % Check if the requested resource is iono   
+            if iscell(center_name)
+                center_name = center_name{1};
+            end
+            
             if numel(resource_name) > 5 && strcmp(resource_name(1:5), 'iono_')
-                % Search for the iono center for the current orbit provider
-                state = Core.getCurrentSettings();
-                iono_center = state.getRemoteIonoCenter();
-                if isempty(iono_center)
-                    iono_center = 'default';
-                end
-                str = this.getData(['ic_' iono_center], resource_name);
+                str = this.getData(['ic_' center_name], resource_name);
             else
                 str = this.getData(['oc_' center_name], resource_name);
             end
             if isempty(str)
-                this.log.addWarning(sprintf('No resource %s for center %s',resource_name, center_name))
+                str = '';
+                if ~strcmp(center_name, 'default')
+                    str = ', using default';
+                end
+                if numel(resource_name) < 3 || ~strcmp(resource_name(1:3), 'vmf')
+                    Core.getLogger.addWarning(sprintf('No resource %s for center %s%s',resource_name, center_name, str))
+                end
                 file_structure = [];
                 latency = [];
             else
                 file_structure = this.parseLogicTree(str);
-                latency = this.getData(['oc_' center_name], [resource_name '_latency']);
+                if numel(resource_name) > 5 && strcmp(resource_name(1:5), 'iono_')
+                    latency = 0; % unkown latency (at the moment it is not present)
+                else
+                    latency = this.getData(['oc_' center_name], [resource_name '_latency']);
+                end
             end
         end
     end
@@ -349,38 +371,85 @@ classdef Remote_Resource_Manager < Ini_Manager
             % Get the orbit type availability
             %
             % SYNTAX
-            %   [flag_frub] = this.getOrbitType(center)            
+            %   [flag_frub] = this.getOrbitType(center) 
+            if iscell(center)
+                center = center{1};
+            end
             flag_frub(1) = ~isempty(this.getData(['oc_' center], 'final'));
             flag_frub(2) = ~isempty(this.getData(['oc_' center], 'rapid'));
             flag_frub(3) = ~isempty(this.getData(['oc_' center], 'ultra'));
             flag_frub(4) = ~isempty(this.getData(['oc_' center], 'broadcast'));
+            flag_frub(5) = ~isempty(this.getData(['oc_' center], 'real-time'));
         end
         
-        function [flag_fp1p2b] = getIonoType(this, center)
+        function [flag_fp1p2b] = getIonoType(this, iono_center)
             % Get the iono type availability
             %
             % SYNTAX
 
             %   [flag_frub] = this.getIonoType(center)  
             state = Core.getCurrentSettings();
-            iono_center = state.getRemoteIonoCenter();
+            if nargin == 1
+                iono_center = state.getRemoteIonoCenter();
+            end
             if isempty(iono_center)
                 iono_center = 'default';
             end
             
-            flag_fp1p2b = false(4, 1);
+            flag_fp1p2b = false(5, 1);
             
-            flag_fp1p2b(1) = ~isempty(this.getData(['ic_' iono_center], 'iono_final'));
-            flag_fp1p2b(2) = ~isempty(this.getData(['ic_' iono_center], 'iono_predicted1'));
-            flag_fp1p2b(3) = ~isempty(this.getData(['ic_' iono_center], 'iono_predicted2'));
-            flag_fp1p2b(4) = ~isempty(this.getData(['ic_' iono_center], 'iono_broadcast'));
+            flag_fp1p2b(1) = ~isempty(this.getData(['ic_' iono_center], 'iono_final')) && ~strcmp(this.getData(['ic_' iono_center], 'iono_final'), 'empty');
+            flag_fp1p2b(2) = ~isempty(this.getData(['ic_' iono_center], 'iono_rapid')) && ~strcmp(this.getData(['ic_' iono_center], 'iono_rapid'), 'empty');
+            flag_fp1p2b(3) = ~isempty(this.getData(['ic_' iono_center], 'iono_predicted1')) && ~strcmp(this.getData(['ic_' iono_center], 'iono_predicted1'), 'empty');
+            flag_fp1p2b(4) = ~isempty(this.getData(['ic_' iono_center], 'iono_predicted2')) && ~strcmp(this.getData(['ic_' iono_center], 'iono_predicted2'), 'empty');
+            flag_fp1p2b(5) = ~isempty(this.getData(['ic_' iono_center], 'iono_broadcast')) && ~strcmp(this.getData(['ic_' iono_center], 'iono_broadcast'), 'empty');
             
-            if ~any(flag_fp1p2b)
+            if ~any(flag_fp1p2b) && ~strcmp(iono_center, 'none')
                 % Switch to default center
                 flag_fp1p2b(1) = ~isempty(this.getData(['ic_default'], 'iono_final'));
-                flag_fp1p2b(2) = ~isempty(this.getData(['ic_default'], 'iono_predicted1'));
-                flag_fp1p2b(3) = ~isempty(this.getData(['ic_default'], 'iono_predicted2'));
-                flag_fp1p2b(4) = ~isempty(this.getData(['ic_default'], 'iono_broadcast'));
+                flag_fp1p2b(2) = ~isempty(this.getData(['ic_default'], 'iono_rapid'));
+                flag_fp1p2b(3) = ~isempty(this.getData(['ic_default'], 'iono_predicted1'));
+                flag_fp1p2b(4) = ~isempty(this.getData(['ic_default'], 'iono_predicted2'));
+                flag_fp1p2b(5) = ~isempty(this.getData(['ic_default'], 'iono_broadcast'));
+            end
+        end
+        
+        function [flag_frub] = getVMFResType(this)
+            % Get the vmf res type availability
+            %
+            % SYNTAX
+            %   [flag_frub] = this.getVMFResType(center)
+            
+            state = Core.getCurrentSettings();
+            
+            if state.mapping_function == 1
+                flag_frub = [false false false];
+            elseif state.mapping_function == 2
+                flag_frub = [false true false];
+            elseif state.mapping_function == 3
+                flag_frub = [false false false];
+            elseif state.mapping_function == 4
+                flag_frub = [true false true];
+            end
+        end
+        
+        function [flag_frub] = getVMFSourceType(this)
+            % Get the vmf availability type availability
+            %
+            % SYNTAX
+            %   [flag_frub] = this.getVMFSourceType(center)
+            state = Core.getCurrentSettings();
+            
+            if state.mapping_function == 1
+                flag_frub = [false false false];
+            elseif state.mapping_function == 2
+                flag_frub = [true false true];
+            elseif state.mapping_function == 3
+                flag_frub = [false false false];
+            elseif state.mapping_function == 4
+                flag_frub = [true true true];
+            elseif state.mapping_function == 5
+                flag_frub = [true true true];
             end
         end
         
@@ -526,7 +595,7 @@ classdef Remote_Resource_Manager < Ini_Manager
                                 index = [index; i];
                             else
                                 if status ~= str(i)
-                                    this.log.addWarning('| and & can not exist at the same level, check parenthesis')
+                                    Core.getLogger.addWarning('| and & can not exist at the same level, check parenthesis')
                                     status = 0;
                                     return
                                 else

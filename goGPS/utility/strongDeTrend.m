@@ -1,12 +1,12 @@
-function detrended_data = strongDeTrend(data, thr_perc, thr_perc_global, n_sigma)
-% Returns the mean per column with a certaint percentile of values in data
+function [detrended_data, trend] = strongDeTrend(data, thr_perc, thr_perc_global, n_sigma)
+% Returns the detrend per column with a certaint percentile of values in data
 % The code uses only the data filtered by the requested percentile to estimate 
-% an std column by column
+% an detred column by column
 % With this estimation only the data within n_sigma range are used for the 
-% robust mean estimation
+% robust detrend estimation
 %
 % SYNTAX:
-%   smean = strongMean(data, thr_perc, thr_perc_global, n_sigma)
+%   smean = strongDeTrend(data, thr_perc, thr_perc_global, n_sigma)
 %
 % INPUT:
 %   data                matrix of values
@@ -15,17 +15,17 @@ function detrended_data = strongDeTrend(data, thr_perc, thr_perc_global, n_sigma
 %   n_sigma             number of sigmas
 %
 % OUTPUT:
-%   smean   strong mean per column
+%   detrended_data   strong detrend per column
 
 %--- * --. --- --. .--. ... * ---------------------------------------------
 %               ___ ___ ___
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
-%  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
+%  Copyright (C) 2020 Gatti Andrea, Giulio Tagliaferro, Eugenio Realini
 %  Written by:       Andrea Gatti
 %  Contributors:     Andrea Gatti ...
 %  A list of all the historical goGPS contributors is in CREDITS.nfo
@@ -48,16 +48,44 @@ function detrended_data = strongDeTrend(data, thr_perc, thr_perc_global, n_sigma
 % 01100111 01101111 01000111 01010000 01010011
 %--------------------------------------------------------------------------
 
-    if nargin < 2 || ~isempty(thr_perc) 
+    if nargin < 2 || isempty(thr_perc) 
         thr_perc = 0.99;
     end
     
-    if nargin < 3 || ~isempty(thr_perc_global) 
-        thr_perc = 0.97;
+    if nargin < 3 || isempty(thr_perc_global) 
+        thr_perc_global = 0.97;
     end
     
-    if nargin < 4 || ~isempty(n_sigma) 
+    if nargin < 4 || isempty(n_sigma) 
         n_sigma = 5;
     end
-    detrended_data = data - cumsum(repmat(strongMean(diff(data), 1, 0.97, 5), size(data, 1), 1));
+    
+    % filter data
+    detrended_data = data;
+    data(abs(data) >= perc(abs(data(:)), thr_perc_global)) = nan;
+    x_in = (1 : size(data,1))';
+    for c = 1 : size(data, 2)
+        data(:,c) = data(:,c) - movmean(data(:,c), 5, 'omitnan'); % reduce the signal with moving mean(to remove the trend)
+        data((abs(data(:, c)) >= perc(abs(data(:, c)), thr_perc)), c) = nan; % keep thr_perc of data
+        thr = n_sigma * std(data(:, c), 'omitnan');
+        lid_ok =  abs(data(:,c)) <= thr;
+        try
+            warning off
+            trend = Core_Utils.interp1LS(x_in(lid_ok), detrended_data(lid_ok, c), 1, x_in); % use the current filtered data to compute the trend
+            warning on;
+        catch
+            trend = 0;
+        end
+        data(:,c) = detrended_data(:,c) - trend;
+        thr = n_sigma * std(data(lid_ok, c), 'omitnan'); % repeat the filtering with the new detrended data
+        lid_ok =  abs(data(:,c)) <= thr;
+        try
+            warning off
+            trend = Core_Utils.interp1LS(x_in(lid_ok), detrended_data(lid_ok, c), 1, x_in); % recompute trend with the new
+            warning on;
+        catch
+            trend = 0;
+        end
+        detrended_data(:,c) = detrended_data(:,c) - trend;
+    end    
 end

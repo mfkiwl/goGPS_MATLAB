@@ -14,7 +14,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2020 Andrea Gatti, Giulio Tagliaferro, Eugenio Realini
@@ -115,17 +115,18 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
         % REFERENCE
         ERP_DIR = [Prj_Settings.DEFAULT_DIR_IN 'reference' filesep 'ERP' filesep '${YYYY}' filesep]; % Earth Rotation Parameters
         ERP_NAME = ''; % Name of ERP files
-        IGRF_DIR = [Prj_Settings.DEFAULT_DIR_IN 'reference' filesep 'IGRF' filesep]; % Path to Geoid folder containing the geoid to be used for the computation of hortometric heighs
+        IGRF_DIR = [Prj_Settings.DEFAULT_DIR_IN 'reference' filesep 'IGRF' filesep]; % Path to Geoid folder containing the geoid to be used for the computation of orthometric heighs
         IGRF_NAME = 'igrf12coeff.txt';
 
-        GEOID_DIR = [Prj_Settings.DEFAULT_DIR_IN 'reference' filesep 'geoid' filesep]; % Path to Geoid folder containing the geoid to be used for the computation of hortometric heighs
-        GEOID_NAME = 'geoid_EGM2008_05.mat'; % File name of the Geoid containing the geoid to be used for the computation of hortometric heighs
+        GEOID_DIR_FALLBACK = [Core.getInstallDir() filesep '..' filesep 'data' filesep 'reference' filesep 'geoid' filesep]; % Fallback path to Geoid folder containing the geoid to be used for the computation of orthometric heighs
+        GEOID_DIR = [Prj_Settings.DEFAULT_DIR_IN 'reference' filesep 'geoid' filesep]; % Path to Geoid folder containing the geoid to be used for the computation of orthometric heighs
+        GEOID_NAME = 'geoid_EGM2008_05.mat'; % File name of the Geoid containing the geoid to be used for the computation of orthometric heighs
         IONO_DIR = [Prj_Settings.DEFAULT_DIR_IN 'reference' filesep 'IONO' filesep '${YYYY}' filesep];
         IONO_NAME = '';
         ATM_LOAD_DIR = [Prj_Settings.DEFAULT_DIR_IN 'reference' filesep 'ATM_LOAD' filesep '${YYYY}' filesep];
         ATM_LOAD_NAME_NT = '';
         ATM_LOAD_NAME_T = 's1_s2_s3_cm_noib_grid.dat';
-        VMF_DIR = [Prj_Settings.DEFAULT_DIR_IN 'reference' filesep 'VMF' filesep '${YYYY}' filesep];
+        VMF_DIR = [Prj_Settings.DEFAULT_DIR_IN 'reference' filesep 'VMF' filesep '${VMFR}' filesep '${VMFS}' filesep '${YYYY}' filesep ];
         VMF_NAME = '';
 
         % COMPUTATION CENTERS
@@ -136,10 +137,13 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
         FLAG_DOWNLOAD = true;      % automatically try to download resources
         FLAG_NO_RESOURCES = false; % one true no resources are used => no orbits are computed -> useful in limited scenarios
         
-        PREFERRED_EPH = {'final', 'rapid', 'ultra', 'broadcast'}
+        PREFERRED_EPH = {'final', 'rapid', 'ultra', 'broadcast', 'real-time'}
         SELECTED_ORBIT_CENTER= {'default'}
         SELECTED_IONO_CENTER= {'default'}
-        PREFERRED_IONO = {'final', 'predicted1', 'predicted2', 'broadcast'}
+        PREFERRED_IONO = {'final', 'rapid', 'predicted1', 'predicted2', 'broadcast'}
+        
+        PREFERRED_VMF_RES = {'1x1', '2.5x2', '5x5'}
+        PREFERRED_VMF_SOURCE = {'operational', 'era-interim', 'forecast'}
 
         % SATELLITES
         EPH_DIR = [Prj_Settings.DEFAULT_DIR_IN 'satellite' filesep 'EPH' filesep '${WWWW}' filesep]; % Path to Ephemeris files folder
@@ -148,7 +152,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
         CLK_NAME = ''; % Name of Clock Offset files
         CRX_DIR = [Prj_Settings.DEFAULT_DIR_IN 'satellite' filesep 'CRX' filesep]; % Path to CRX folder containing files of Satellites problems
         CRX_NAME = 'SAT_${YYYY}.CRX';
-        DCB_DIR = [Prj_Settings.DEFAULT_DIR_IN 'satellite' filesep 'DCB' filesep]; % Path to DCB folder containing files of Differential Code Biases
+        BIAS_DIR = [Prj_Settings.DEFAULT_DIR_IN 'satellite' filesep 'BIAS' filesep]; % Path to BIAS folder containing files of Differential Code Biases
         EMS_DIR = [Prj_Settings.DEFAULT_DIR_IN 'satellite' filesep 'SBAS' filesep 'EMS' filesep]; % Path to EMS folder containing files of EGNOS Message Server.
 
         % ANTENNA
@@ -184,7 +188,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
 
         % DATA SELECTION
         CC = Constellation_Collector('G');              % object containing info on the activated constellations
-        MIN_P_EPOCH = 60;                               % Minimum percentage of epochs to consider a receiver valid
+        MIN_P_EPOCH = 30;                               % Minimum percentage of epochs to consider a receiver valid
         MIN_N_SAT = 2;                                  % Minimum number of satellites needed to process a valid epoch
         CUT_OFF = 10;                                   % Cut-off [degrees]
         ABS_SNR_THR = 0;                                % Signal-to-noise ratio absolute threshold [dB]
@@ -194,7 +198,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
         % ADV DATA SELECTION
         FLAG_OUTLIER = true;                            % Flag for enabling outlier detection
         PP_SPP_THR = 10;                                % Threshold on the code point-positioning least squares estimation error [m]
-        PP_MAX_CODE_ERR_THR = 20;                       % Threshold on the maximum residual of code observations [m] (pre-processing)
+        PP_MAX_CODE_ERR_THR = 50;                       % Threshold on the maximum residual of code observations [m] (pre-processing)
         MAX_CODE_ERR_THR = 10;                          % Threshold on the maximum residual of code observations [m]
         MAX_PHASE_ERR_THR = 0.10;                       % Threshold on the maximum residual of phase observations [m]
 
@@ -265,17 +269,30 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
                                                         % - iono_model = 2: Klobuchar model
                                                         % - iono_model = 3: IONEX
                                                         
-        ZD_MODEL  = 2;                                  % A-priori Tropospheric Zenith delay model to be used (1: none, 2: Saastamoinen , 3: Vienna mapping function gridded delays)
-                                                        % - zd_model = 1: no model
-                                                        % - zd_model = 2: Saastamoinen
-                                                        % - zd_model = 3:  Vienna mapping function gridded delay
+        ZD_MODEL = 1;                                   % A-priori Tropospheric Zenith delay model to be used (1: none, 2: Saastamoinen , 3: Vienna mapping function gridded delays)
+                                                        % - zd_model = 1: Saastamoinen
+                                                        % - zd_model = 1: Vienna mapping function gridded delay
+       
+        ZDM_SAAST = 1;
+        ZDM_VMF = 2
+         
         MAPPING_FUNCTION = 1                            % Mapping function to be used
                                                         % 1 : GMF
                                                         % 2 : VMF gridded
                                                         % 3 : Niell
+                                                        % 4 : VMF3 1x1 grifdded
+                                                        % 5 : VMF3 5x5 grifdded
+        MF_GMF = 1
+        MF_VMF1 = 2
+        MF_NIEL = 3
+        MF_VMF3_1 = 4
+        MF_VMF3_5 = 5
+                                                        
         MAPPING_FUNCTION_GRADIENT = 1                   % Mapping function to be used
                                                         % 1 : chen and  herring
                                                         % 2 : macmillan
+        MFG_CHEN = 1
+        MFG_MACM = 2
                                                         % ADV ATMOSPHERE
         METEO_DATA = 2;                                 % Meteo data to be used
                                                         % 1: standard atmopshere
@@ -315,11 +332,11 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
         FLAG_COO_PPP  = true; % estimate coordinets in ppp
         FLAG_COO_NET  = true; % estimate coordinates in network
         
-        TPARAM_COO_PPP = LS_Parametrization.CONST; % time paramterization of coordinates ppp
-        TPARAM_COO_NET = LS_Parametrization.CONST; % time paramterization of coordinates net
+        TPARAM_COO_PPP = LS_Parametrization.CONST; % time parametrization of coordinates ppp
+        TPARAM_COO_NET = LS_Parametrization.CONST; % time parametrization of coordinates net
         
-        FPARAM_COO_PPP = LS_Parametrization.ALL_FREQ; % frequenccy paramterization of coordinates ppp
-        FPARAM_COO_NET = LS_Parametrization.ALL_FREQ;  % frequenccy paramterization of coordinates net
+        FPARAM_COO_PPP = LS_Parametrization.ALL_FREQ; % frequenccy parametrization of coordinates ppp
+        FPARAM_COO_NET = LS_Parametrization.ALL_FREQ;  % frequenccy parametrization of coordinates net
         
         RATE_COO_PPP = 0; % time rate coordinates ppp
         RATE_COO_NET = 0;  % time rate coordinates net
@@ -337,8 +354,8 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
         FLAG_ZTD_PPP  = true; % estimate ztd in ppp
         FLAG_ZTD_NET  = true; % estimate ztd in net
         
-        TPARAM_ZTD_PPP  = LS_Parametrization.EP_WISE;   % time paramterization of ztd ppp
-        TPARAM_ZTD_NET  = LS_Parametrization.SPLINE_CUB;  % time paramterization of ztd net
+        TPARAM_ZTD_PPP  = 1;   % time parametrization of ztd ppp defult epochwise
+        TPARAM_ZTD_NET  = 3;  % time parametrization of ztd net defult cubic spline
         
         RATE_ZTD_PPP = 900; % time rate ztd ppp
         RATE_ZTD_NET = 900; % time rate ztd net
@@ -352,8 +369,8 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
         FLAG_GRAD_PPP  = true; % estimate ztd gradient in ppp
         FLAG_GRAD_NET  = true; % estimate ztd gradient in net
         
-        TPARAM_GRAD_PPP  = LS_Parametrization.EP_WISE;  % time paramterization of ztd  gradient ppp
-        TPARAM_GRAD_NET  = LS_Parametrization.SPLINE_CUB;  % time paramterization of ztd gradient net 
+        TPARAM_GRAD_PPP  = 1;  % time parametrization of ztd  gradient ppp
+        TPARAM_GRAD_NET  = 3;  % time parametrization of ztd gradient net 
         
         RATE_GRAD_PPP = 7200; % time rate ztd gradient ppp
         RATE_GRAD_NET  = 7200; % time rate ztd gradient net
@@ -362,7 +379,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
         AREG_GRAD_NET = 0.02; % absolute regularization  ztd gradient  in network
         
         DREG_GRAD_PPP = 0.001; % differential regularization ztd gradient  in ppp
-        DREG_GRAD_NET = 0.001; % differential  regularization ztd gradient  in network
+        DREG_GRAD_NET = 0.001; % differential regularization ztd gradient  in network
         
         
         FLAG_SREG_ZTD_PPP = false;
@@ -434,8 +451,8 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
         FLAG_REC_IFBIAS_PPP = false;  % estimate receiver inter frequency bias ppp
         FLAG_REC_IFBIAS_NET = false;  % estimate receiver inter frequency bias net
         
-        TPARAM_REC_IFBIAS_PPP  = LS_Parametrization.SPLINE_CUB;  % time paramterization of receiver inter frequency bias ppp
-        TPARAM_REC_IFBIAS_NET  = LS_Parametrization.SPLINE_CUB;  % time paramterization of receiver inter frequency bias net
+        TPARAM_REC_IFBIAS_PPP  = LS_Parametrization.SPLINE_CUB;  % time parametrization of receiver inter frequency bias ppp
+        TPARAM_REC_IFBIAS_NET  = LS_Parametrization.SPLINE_CUB;  % time parametrization of receiver inter frequency bias net
         
         RATE_REC_IFBIAS_PPP = 3600;  % time rate of receiver inter frequency bias ppp 
         RATE_REC_IFBIAS_NET = 3600;  % time rate of receiver inter frequency bias net
@@ -449,8 +466,8 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
         FLAG_SAT_IFBIAS_PPP = true;  % estimate satellite inter frequency bias ppp
         FLAG_SAT_IFBIAS_NET = true;  % estimate satellite inter frequency bias net
         
-        TPARAM_SAT_IFBIAS_PPP = LS_Parametrization.SPLINE_CUB;  % time paramterization of satellite inter frequency bias ppp
-        TPARAM_SAT_IFBIAS_NET = LS_Parametrization.SPLINE_CUB;  % time paramterization of satellite inter frequency bias net
+        TPARAM_SAT_IFBIAS_PPP = LS_Parametrization.SPLINE_CUB;  % time parametrization of satellite inter frequency bias ppp
+        TPARAM_SAT_IFBIAS_NET = LS_Parametrization.SPLINE_CUB;  % time parametrization of satellite inter frequency bias net
         
         RATE_SAT_IFBIAS_PPP = 3600;  % time rate of satellite inter frequency bias ppp 
         RATE_SAT_IFBIAS_NET = 3600;  % time rate of satellite inter frequency bias net
@@ -464,8 +481,8 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
         FLAG_REC_TRKBIAS_PPP = true;  % estimate receiver inter tracking bias ppp
         FLAG_REC_TRKBIAS_NET = true;  % estimate receiver inter tracking bias net
         
-        TPARAM_REC_TRKBIAS_PPP = LS_Parametrization.CONST;  % time paramterization of receiver inter tracking bias ppp
-        TPARAM_REC_TRKBIAS_NET = LS_Parametrization.CONST;  % time paramterization of receiver inter tracking bias net
+        TPARAM_REC_TRKBIAS_PPP = LS_Parametrization.CONST;  % time parametrization of receiver inter tracking bias ppp
+        TPARAM_REC_TRKBIAS_NET = LS_Parametrization.CONST;  % time parametrization of receiver inter tracking bias net
         
         RATE_REC_TRKBIAS_PPP = 0;  % time rate of receiver inter tracking bias ppp 
         RATE_REC_TRKBIAS_NET = 0;  % time rate of receiver inter tracking bias net
@@ -480,8 +497,8 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
         FLAG_SAT_TRKBIAS_PPP = true; % estimate satellite inter tracking bias ppp
         FLAG_SAT_TRKBIAS_NET = true; % estimate satellite inter tracking bias net
         
-        TPARAM_SAT_TRKBIAS_PPP = LS_Parametrization.CONST;   % time paramterization of satellite inter tracking bias ppp
-        TPARAM_SAT_TRKBIAS_NET = LS_Parametrization.CONST;   % time paramterization of satellite inter tracking bias net
+        TPARAM_SAT_TRKBIAS_PPP = LS_Parametrization.CONST;   % time parametrization of satellite inter tracking bias ppp
+        TPARAM_SAT_TRKBIAS_NET = LS_Parametrization.CONST;   % time parametrization of satellite inter tracking bias net
         
         RATE_SAT_TRKBIAS_PPP = 0;  % time rate of satellite inter tracking bias ppp 
         RATE_SAT_TRKBIAS_NET = 0;  % time rate of satellite inter tracking bias net
@@ -599,9 +616,11 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
         ZD_LABEL =  {'Saastamoinen from meteo data','VMF gridded zenith delays'}
         % id to string of mappig functions
         MF_SMODE = {'1: Global Mapping Function', ...
-            '2: Vienna Mapping Function gridded', ...
-            '3: Niell Mapping Function'}
-        MF_LABEL = {'GMF','VMF gridded','Niell'}
+            '2: Vienna Mapping Function 1 gridded', ...
+            '3: Niell Mapping Function', ...
+            '4: Vienna Mapping Function 3 1x1 gridded', ...
+            '5: Vienna Mapping Function 3 5x5 gridded'}
+        MF_LABEL = {'GMF','VMF1 gridded','Niell','VMF3 gridded 1x1','VMF3 gridded 5x5'}
 
         % id to string of gradients mappig functions
         MFG_SMODE = {'1: Chen and Herring', '2: MacMillan'}
@@ -659,6 +678,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
         
         % Location of the communication dir for parallel message passing interface
         com_dir = Prj_Settings.COM_DIR;
+        %max_timeout_time = 3600;
 
         %------------------------------------------------------------------
         % PROJECT
@@ -732,6 +752,8 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
         selected_orbit_center = Prj_Settings.SELECTED_ORBIT_CENTER;
         selected_iono_center = Prj_Settings.SELECTED_IONO_CENTER;
 
+        preferred_vmf_res = Prj_Settings.PREFERRED_VMF_RES;         % kind of orbits to prefer
+        preferred_vmf_source = Prj_Settings.PREFERRED_VMF_SOURCE;
         %------------------------------------------------------------------
         % SATELLITES
         %------------------------------------------------------------------
@@ -747,9 +769,9 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
         % Path to CRX folder containing files of Satellites problems
         crx_dir = Prj_Settings.CRX_DIR;
         crx_name = Prj_Settings.CRX_NAME;
-        % Path to DCB folder containing files of Differential Code Biases
-        dcb_dir = Prj_Settings.DCB_DIR;
-        dcb_name = []; % setted in File_Wizard.ConjureDCB
+        % Path to BIAS folder containing files of Differential Code Biases
+        bias_dir = Prj_Settings.BIAS_DIR;
+        bias_name = []; % setted in File_Wizard.ConjureBias
         % Path to EMS folder containing files of EGNOS Message Server.
         ems_dir = Prj_Settings.EMS_DIR;
 
@@ -791,8 +813,8 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
         igrf_dir = Prj_Settings.IGRF_DIR;   % Path to IGRF files folder
         igrf_name = Prj_Settings.IGRF_NAME;
 
-        geoid_dir = Prj_Settings.GEOID_DIR;   % Path to Geoid folder containing the geoid to be used for the computation of hortometric heighs
-        geoid_name = Prj_Settings.GEOID_NAME; % Name of the Geoid file containing the geoid to be used for the computation of hortometric heighs
+        geoid_dir = Prj_Settings.GEOID_DIR;   % Path to Geoid folder containing the geoid to be used for the computation of orthometric heighs
+        geoid_name = Prj_Settings.GEOID_NAME; % Name of the Geoid file containing the geoid to be used for the computation of orthometric heighs
 
         ocean_name =  Prj_Settings.OCEAN_NAME; % Location of the ocean loading file
 
@@ -924,7 +946,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
         % - iono_model = 2: Klobuchar model
         % - iono_model = 3: IONEX
 
-        % A-priori Tropospheric model to be used (0: none, 1: Saastamoinen std parameters, 2: Saastamoinen global pararameters)
+        % A-priori Tropospheric model to be used (1: Saastamoinen std parameters, 2: Saastamoinen global pararameters)
         zd_model = Prj_Settings.ZD_MODEL;
         mapping_function = Prj_Settings.MAPPING_FUNCTION;
         mapping_function_gradient = Prj_Settings.MAPPING_FUNCTION_GRADIENT;
@@ -1084,6 +1106,8 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
         flag_out_res_pr = true;     % code residuals
         flag_out_res_ph = true;     % phase residuals
         flag_out_mf = true;         % mapping functions (wet / hydrostatic)
+        vmf_res;                    % found vmf res
+        vmf_source;                 % found vmf source
     end
 
     % =========================================================================
@@ -1122,8 +1146,9 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
                     this.importIniFile(ini_settings_file);
                 elseif (exist(this.getIniPath, 'file') == 2)
                     this.importIniFile(this.getIniPath);
-                else log.addMarkedMessage('Using default settings');
-                    log.newLine();
+                else
+                    Core.getLogger.addMarkedMessage('Using default settings');
+                    Core.getLogger.newLine();
                     this.postImportInit();
                 end
             end
@@ -1195,24 +1220,24 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
                 
                 this.rec_dyn_mode = state.getData('rec_dyn_mode');
 
-                this.crd_dir    = fnp.getFullDirPath(state.getData('crd_dir'), this.prj_home, [], fnp.getFullDirPath(this.(upper('crd_dir')), this.prj_home));
+                this.crd_dir    = fnp.getFullDirPath(state.getData('crd_dir'), this.prj_home, [], fnp.getFullDirPath(fnp.checkPath(this.(upper('crd_dir')), this.prj_home), this.prj_home));
                 this.crd_name   = fnp.checkPath(state.getData('crd_name'), this.getHomeDir());
-                this.met_dir    = fnp.getFullDirPath(state.getData('met_dir'), this.prj_home, [], fnp.getFullDirPath(this.(upper('met_dir')), this.prj_home));
+                this.met_dir    = fnp.getFullDirPath(state.getData('met_dir'), this.prj_home, [], fnp.getFullDirPath(fnp.checkPath(this.(upper('met_dir')), this.prj_home), this.prj_home));
                 this.met_name   = fnp.checkPath(state.getData('met_name'), this.getHomeDir());
                 this.met_full_name = {};
-                this.ocean_dir  = fnp.getFullDirPath(state.getData('ocean_dir'), this.prj_home, [], fnp.getFullDirPath(this.(upper('ocean_dir')), this.prj_home));
+                this.ocean_dir  = fnp.getFullDirPath(state.getData('ocean_dir'), this.prj_home, [], fnp.getFullDirPath(fnp.checkPath(this.(upper('ocean_dir')), this.prj_home), this.prj_home));
                 this.ocean_name = fnp.checkPath(state.getData('ocean_name'), this.getHomeDir());
 
                 % REFERENCE
                 %this.remote_res_conf_dir = fnp.getFullDirPath(settings.getData('remote_res_conf_dir'), this.prj_home, [], fnp.getFullDirPath(this.(upper('remote_res_conf_dir')), this.prj_home));
-                this.igrf_dir   = fnp.getFullDirPath(state.getData('igrf_dir'), this.prj_home, [], fnp.getFullDirPath(this.(upper('igrf_dir')), this.prj_home));
+                this.igrf_dir   = fnp.getFullDirPath(state.getData('igrf_dir'), this.prj_home, [], fnp.getFullDirPath(fnp.checkPath(this.(upper('igrf_dir')), this.prj_home), this.prj_home));
                 this.igrf_name  = fnp.checkPath(state.getData('igrf_name'), this.getHomeDir());
-                this.erp_dir    = fnp.getFullDirPath(state.getData('erp_dir'), this.prj_home, [], fnp.getFullDirPath(this.(upper('erp_dir')), this.prj_home));
-                this.geoid_dir  = fnp.getFullDirPath(state.getData('geoid_dir'), this.prj_home, [], fnp.getFullDirPath(this.(upper('geoid_dir')), this.prj_home));
+                this.erp_dir    = fnp.getFullDirPath(state.getData('erp_dir'), this.prj_home, [], fnp.getFullDirPath(fnp.checkPath(this.(upper('erp_dir')), this.prj_home), this.prj_home));
+                this.geoid_dir  = fnp.getFullDirPath(state.getData('geoid_dir'), this.prj_home, [], fnp.getFullDirPath(fnp.checkPath(this.(upper('geoid_dir')), this.prj_home), this.prj_home));
                 this.geoid_name = fnp.checkPath(state.getData('geoid_name'), this.getHomeDir());
-                this.iono_dir   = fnp.getFullDirPath(state.getData('iono_dir'), this.prj_home, [], fnp.getFullDirPath(this.(upper('iono_dir')), this.prj_home));
-                this.atm_load_dir   = fnp.getFullDirPath(state.getData('atm_load_dir'), this.prj_home, [], fnp.getFullDirPath(this.(upper('atm_load_dir')), this.prj_home));
-                this.vmf_dir   = fnp.getFullDirPath(state.getData('vmf_dir'), this.prj_home, [], fnp.getFullDirPath(this.(upper('vmf_dir')), this.prj_home));
+                this.iono_dir   = fnp.getFullDirPath(state.getData('iono_dir'), this.prj_home, [], fnp.getFullDirPath(fnp.checkPath(this.(upper('iono_dir')), this.prj_home), this.prj_home));
+                this.atm_load_dir   = fnp.getFullDirPath(state.getData('atm_load_dir'), this.prj_home, [], fnp.getFullDirPath(fnp.checkPath(this.(upper('atm_load_dir')), this.prj_home), this.prj_home));
+                this.vmf_dir   = fnp.getFullDirPath(state.getData('vmf_dir'), this.prj_home, [], fnp.getFullDirPath(fnp.checkPath(this.(upper('vmf_dir')), this.prj_home), this.prj_home));
 
                 % COMPUTATION CENTERS
                 this.flag_download = state.getData('flag_download');
@@ -1221,6 +1246,10 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
                 this.preferred_iono = state.getData('preferred_iono');
                 this.selected_orbit_center = state.getData('selected_orbit_center');
                 this.selected_iono_center = state.getData('selected_iono_center');
+                
+                this.preferred_vmf_res = state.getData('preferred_vmf_res');
+                this.preferred_vmf_source = state.getData('preferred_vmf_source');
+                
                 if isempty(this.selected_orbit_center)
                     %                                try                                                                the old name:
                     this.selected_orbit_center = 'default';
@@ -1230,11 +1259,11 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
                     this.selected_iono_center = 'default';
                 end
                 % SATELLITES
-                this.eph_dir    = fnp.getFullDirPath(state.getData('eph_dir'), this.prj_home, [], fnp.getFullDirPath(this.(upper('eph_dir')), this.prj_home));
-                this.clk_dir    = fnp.getFullDirPath(state.getData('clk_dir'), this.prj_home, [], fnp.getFullDirPath(this.(upper('clk_dir')), this.prj_home));
-                this.crx_dir    = fnp.getFullDirPath(state.getData('crx_dir'), this.prj_home, [], fnp.getFullDirPath(this.(upper('crx_dir')), this.prj_home));
-                this.dcb_dir    = fnp.getFullDirPath(state.getData('dcb_dir'), this.prj_home, [], fnp.getFullDirPath(this.(upper('dcb_dir')), this.prj_home));
-                this.ems_dir    = fnp.getFullDirPath(state.getData('ems_dir'), this.prj_home, [], fnp.getFullDirPath(this.(upper('ems_dir')), this.prj_home));
+                this.eph_dir    = fnp.getFullDirPath(state.getData('eph_dir'), this.prj_home, [], fnp.getFullDirPath(fnp.checkPath(this.(upper('eph_dir')), this.prj_home), this.prj_home));
+                this.clk_dir    = fnp.getFullDirPath(state.getData('clk_dir'), this.prj_home, [], fnp.getFullDirPath(fnp.checkPath(this.(upper('clk_dir')), this.prj_home), this.prj_home));
+                this.crx_dir    = fnp.getFullDirPath(state.getData('crx_dir'), this.prj_home, [], fnp.getFullDirPath(fnp.checkPath(this.(upper('crx_dir')), this.prj_home), this.prj_home));
+                this.bias_dir   = fnp.getFullDirPath(state.getData('bias_dir'), this.prj_home, [], fnp.getFullDirPath(fnp.checkPath(this.(upper('bias_dir')), this.prj_home), this.prj_home));
+                this.ems_dir    = fnp.getFullDirPath(state.getData('ems_dir'), this.prj_home, [], fnp.getFullDirPath(fnp.checkPath(this.(upper('ems_dir')), this.prj_home), this.prj_home));
 
                 % ANTENNAS
                 this.atx_dir    = fnp.getFullDirPath(state.getData('atx_dir'), this.prj_home, pwd);
@@ -1252,7 +1281,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
                 this.mp_n_min = state.getData('mp_n_min');
                 
                 % OUTPUT
-                this.out_dir = fnp.getFullDirPath(state.getData('out_dir'), this.prj_home, [], fnp.getFullDirPath(this.(upper('out_dir')), this.prj_home));
+                this.out_dir = fnp.getFullDirPath(state.getData('out_dir'), this.prj_home, [], fnp.getFullDirPath(fnp.checkPath(this.(upper('out_dir')), this.prj_home), this.prj_home));
                 if ~exist(this.out_dir, 'dir')
                     % fallback of fallback
                     this.out_dir = fnp.getFullDirPath(state.getData('out_dir'), this.prj_home);
@@ -1609,6 +1638,9 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
                 this.preferred_iono = state.preferred_iono;
                 this.selected_orbit_center = state.selected_orbit_center;
                 this.selected_iono_center = state.selected_iono_center;
+                
+                this.preferred_vmf_res = state.preferred_vmf_res;
+                this.preferred_vmf_source = state.preferred_vmf_source;
 
                 % SATELLITES
                 this.eph_dir     = state.eph_dir;
@@ -1616,7 +1648,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
                 this.clk_dir     = state.clk_dir;
                 this.clk_name    = state.clk_name;
                 this.crx_dir     = state.crx_dir;
-                this.dcb_dir     = state.dcb_dir;
+                this.bias_dir    = state.bias_dir;
                 this.ems_dir     = state.ems_dir;
 
                 % ANTENNA
@@ -1846,7 +1878,6 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
                 this.dreg_sat_trkbias_net    = state.dreg_sat_trkbias_net;
             end
             
-            this.check(); % check after import
             this.eph_full_name = '';
             this.clk_full_name = '';
             this.erp_full_name = '';
@@ -1922,8 +1953,10 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             str = [str sprintf(' Try to download the missing resources:            %d\n\n', this.flag_download)];
             str = [str sprintf(' Preferred order for orbits products:              %s\n', strCell2Str(this.preferred_eph))];
             str = [str sprintf(' Preferred order for iono products:                %s\n', strCell2Str(this.preferred_iono))];
-            str = [str sprintf(' Selected orbital center:                          %s\n\n', strCell2Str(this.selected_orbit_center))];
-            str = [str sprintf(' Selected ionosphere center:                          %s\n\n', strCell2Str(this.selected_iono_center))];
+            str = [str sprintf(' Selected orbital center:                          %s\n', strCell2Str(this.selected_orbit_center))];
+            str = [str sprintf(' Selected ionosphere center:                       %s\n', strCell2Str(this.selected_iono_center))];
+            str = [str sprintf(' Selected VMF resolution:                          %s\n', strCell2Str(this.preferred_vmf_res))];
+            str = [str sprintf(' Selected VMF source:                              %s\n\n', strCell2Str(this.preferred_vmf_source))];
             
             str = [str '---- INPUT: SATELLITE ------------------------------------------------------' 10 10];
             str = [str sprintf(' Directory of Ephemeris files:                     %s\n', fnp.getRelDirPath(this.eph_dir, this.prj_home))];
@@ -1931,7 +1964,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             str = [str sprintf(' Directory of Satellite clock offsets:             %s\n', fnp.getRelDirPath(this.clk_dir, this.prj_home))];
             str = [str sprintf(' Name of Satellite clock offsets:                  %s\n', this.clk_name)];
             str = [str sprintf(' Directory of CRX (satellite problems):            %s\n', fnp.getRelDirPath(this.crx_dir, this.prj_home))];
-            str = [str sprintf(' Directory of DCB (Differential Code Biases):      %s\n', fnp.getRelDirPath(this.dcb_dir, this.prj_home))];
+            str = [str sprintf(' Directory of Biases:                              %s\n', fnp.getRelDirPath(this.bias_dir, this.prj_home))];
             str = [str sprintf(' Directory of EMS (EGNOS Message Server):          %s\n\n', fnp.getRelDirPath(this.ems_dir, this.prj_home))];
             
             str = [str '---- INPUT: ANTENNAS -------------------------------------------------------' 10 10];
@@ -2051,8 +2084,8 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             str = [str sprintf(' Estimates coordinates in network                  %d\n' ,this.flag_coo_net            )];
             str = [str sprintf(' Time parametrization coordinates PPP              %d\n' ,this.tparam_coo_ppp          )];
             str = [str sprintf(' Time parametrization coordimates network          %d\n' ,this.tparam_coo_net          )];
-            str = [str sprintf(' Frequency paramterization coordinates PPP         %d\n' ,this.fparam_coo_ppp          )];
-            str = [str sprintf(' Frequency paramterization coordinates network     %d\n' ,this.fparam_coo_net          )];
+            str = [str sprintf(' Frequency parametrization coordinates PPP         %d\n' ,this.fparam_coo_ppp          )];
+            str = [str sprintf(' Frequency parametrization coordinates network     %d\n' ,this.fparam_coo_net          )];
             str = [str sprintf(' Rate coordinates PPP                              %d\n' ,this.rate_coo_ppp            )];
             str = [str sprintf(' Rate coordinates network                          %d\n' ,this.rate_coo_net            )];
             str = [str sprintf(' absolute regularization PPP [m] (Hor Vert)     %d %d\n' ,this.areg_coo_ppp        )];
@@ -2072,8 +2105,8 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             str = [str sprintf(' Differential regularization ZTD network [m/h^0.5] %d\n' ,this.dreg_ztd_net            )];
             str = [str sprintf(' Estimates ZTD gradients in PPP                    %d\n' ,this.flag_grad_ppp           )];
             str = [str sprintf(' Estimates ZTD gradients in network                %d\n' ,this.flag_grad_net           )];
-            str = [str sprintf(' Time paramterization ZTD gradients in PPP         %d\n' ,this.tparam_grad_ppp         )];
-            str = [str sprintf(' Time paramterization ZTD gradients in network     %d\n' ,this.tparam_grad_net         )];
+            str = [str sprintf(' Time parametrization ZTD gradients in PPP         %d\n' ,this.tparam_grad_ppp         )];
+            str = [str sprintf(' Time parametrization ZTD gradients in network     %d\n' ,this.tparam_grad_net         )];
             str = [str sprintf(' Rate ZTD gardients in PPP                         %d\n' ,this.rate_grad_ppp           )];
             str = [str sprintf(' Rate ZTD gradients in network                     %d\n' ,this.rate_grad_net           )];
             str = [str sprintf(' Absolute regularization ZTD gradient PPP [m]      %g\n' ,this.areg_grad_ppp           )];
@@ -2101,8 +2134,8 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             str = [str sprintf(' Differential regularization satellite clock in network [m/sqrt(h)] %g\n' ,this.dreg_sat_clock_net      )];
             str = [str sprintf(' Estimate receiver interfrequency bias in PPP                        %d\n' ,this.flag_rec_ifbias_ppp     )];
             str = [str sprintf(' Estimate receiver interfrequency bias in network                    %d\n' ,this.flag_rec_ifbias_net     )];
-            str = [str sprintf(' Time paramterization receiver interfrequency bias in PPP            %d\n' ,this.tparam_rec_ifbias_ppp   )];
-            str = [str sprintf(' Time paramterization receiver interfrequency bias in network        %d\n' ,this.tparam_rec_ifbias_net   )];
+            str = [str sprintf(' Time parametrization receiver interfrequency bias in PPP            %d\n' ,this.tparam_rec_ifbias_ppp   )];
+            str = [str sprintf(' Time parametrization receiver interfrequency bias in network        %d\n' ,this.tparam_rec_ifbias_net   )];
             str = [str sprintf(' Rate receiver interfrequency bias in PPP                            %d\n' ,this.rate_rec_ifbias_ppp     )];
             str = [str sprintf(' Rate receiver interfrequency bias in network                        %d\n' ,this.rate_rec_ifbias_net     )];
             str = [str sprintf(' Absolute regularization receiver interfrequency bias in PPP [m]     %g\n' ,this.areg_rec_ifbias_ppp     )];
@@ -2111,8 +2144,8 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             str = [str sprintf(' Differential regularization receiver interfrequency bias in network [m/sqrt(h)]   %g\n' ,this.dreg_rec_ifbias_net     )];
             str = [str sprintf(' Estimate satellite interfrequency bias in PPP                       %d\n' ,this.flag_sat_ifbias_ppp     )];
             str = [str sprintf(' Estimate satellite interfrequency bias in network                   %d\n' ,this.flag_sat_ifbias_net     )];
-            str = [str sprintf(' Time paramterization satellite interfrequency bias in PPP           %d\n' ,this.tparam_sat_ifbias_ppp   )];
-            str = [str sprintf(' Time paramterization satellite interfrequency bias in network       %d\n' ,this.tparam_sat_ifbias_net   )];
+            str = [str sprintf(' Time parametrization satellite interfrequency bias in PPP           %d\n' ,this.tparam_sat_ifbias_ppp   )];
+            str = [str sprintf(' Time parametrization satellite interfrequency bias in network       %d\n' ,this.tparam_sat_ifbias_net   )];
             str = [str sprintf(' Rate satellite interfrequency bias in PPP                           %d\n' ,this.rate_sat_ifbias_ppp     )];
             str = [str sprintf(' Rate satellite interfrequency bias in network                       %d\n' ,this.rate_sat_ifbias_net     )];
             str = [str sprintf(' Absolute regularization satellite interfrequency bias in PPP [m]    %g\n' ,this.areg_sat_ifbias_ppp     )];
@@ -2121,8 +2154,8 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             str = [str sprintf(' Differential regularization satellite interfrequency bias in network [m/sqrt(h)]  %g\n' ,this.dreg_sat_ifbias_net     )];
             str = [str sprintf(' Estimate receiver intertracking bias in PPP                         %d\n' ,this.flag_rec_trkbias_ppp    )];
             str = [str sprintf(' Estimate receiver intertracking bias in network                     %d\n' ,this.flag_rec_trkbias_net    )];
-            str = [str sprintf(' Time paramterization receiver intertracking bias in PPP             %d\n' ,this.tparam_rec_trkbias_ppp  )];
-            str = [str sprintf(' Time paramterization receiver intertracking bias in network         %d\n' ,this.tparam_rec_trkbias_net  )];
+            str = [str sprintf(' Time parametrization receiver intertracking bias in PPP             %d\n' ,this.tparam_rec_trkbias_ppp  )];
+            str = [str sprintf(' Time parametrization receiver intertracking bias in network         %d\n' ,this.tparam_rec_trkbias_net  )];
             str = [str sprintf(' Rate receiver intertracking bias in PPP                             %d\n' ,this.rate_rec_trkbias_ppp    )];
             str = [str sprintf(' Rate receiver intertracking bias in network                         %d\n' ,this.rate_rec_trkbias_net    )];
             str = [str sprintf(' Absolute regularization receiver intertracking bias in PPP [m]      %g\n' ,this.areg_rec_trkbias_ppp    )];
@@ -2131,8 +2164,8 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             str = [str sprintf(' Differential regularization receiver intertracking bias  in network [m/sqrt(h)]    %g\n' ,this.dreg_rec_trkbias_net    )];
             str = [str sprintf(' Estimate satellite intertracking bias in PPP                        %d\n' ,this.flag_sat_trkbias_ppp    )];
             str = [str sprintf(' Estimate satellite intertracking bias in network                    %d\n' ,this.flag_sat_trkbias_net    )];
-            str = [str sprintf(' Time paramterization satellite intertracking bias in PPP            %d\n' ,this.tparam_sat_trkbias_ppp  )];
-            str = [str sprintf(' Time paramterization satellite intertracking bias in network        %d\n' ,this.tparam_sat_trkbias_net  )];
+            str = [str sprintf(' Time parametrization satellite intertracking bias in PPP            %d\n' ,this.tparam_sat_trkbias_ppp  )];
+            str = [str sprintf(' Time parametrization satellite intertracking bias in network        %d\n' ,this.tparam_sat_trkbias_net  )];
             str = [str sprintf(' Rate satellite intertracking bias in PPP                            %d\n' ,this.rate_sat_trkbias_ppp    )];
             str = [str sprintf(' Rate satellite intertracking bias in network                        %d\n' ,this.rate_sat_trkbias_net    )];
             str = [str sprintf(' Absolute regularization satellite intertracking bias in PPP [m]     %g\n' ,this.areg_sat_trkbias_ppp    )];
@@ -2313,6 +2346,13 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             str_cell = Ini_Manager.toIniStringComment('SELECTED computational center (e.g. default, igs_glo, igs_gps, code, code_mgex, gfz, jaxa', str_cell);
             str_cell = Ini_Manager.toIniString('selected_orbit_center', this.selected_orbit_center, str_cell);
             str_cell = Ini_Manager.toIniString('selected_iono_center', this.selected_iono_center, str_cell);
+            
+            str_cell = Ini_Manager.toIniStringComment('Preferred VMF resolution,', str_cell);
+            str_cell = Ini_Manager.toIniStringComment(sprintf('accepted values: %s', Ini_Manager.strCell2Str(this.PREFERRED_VMF_RES)), str_cell);
+            str_cell = Ini_Manager.toIniString('preferred_vmf_res', this.preferred_vmf_res, str_cell);
+            str_cell = Ini_Manager.toIniStringComment('Preferred VMF source,', str_cell);
+            str_cell = Ini_Manager.toIniStringComment(sprintf('accepted values: %s', Ini_Manager.strCell2Str(this.PREFERRED_VMF_SOURCE)), str_cell);
+            str_cell = Ini_Manager.toIniString('preferred_vmf_source', this.preferred_vmf_source, str_cell);
 
             str_cell = Ini_Manager.toIniStringNewLine(str_cell);
         end
@@ -2339,8 +2379,8 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             str_cell = Ini_Manager.toIniStringComment('Directory of CRX files (containing satellite problems)', str_cell);
             str_cell = Ini_Manager.toIniString('crx_dir', fnp.getRelDirPath(this.crx_dir, this.prj_home), str_cell);
             str_cell = Ini_Manager.toIniStringNewLine(str_cell);
-            str_cell = Ini_Manager.toIniStringComment('Directory of DCB files (Differential Code Biases)', str_cell);
-            str_cell = Ini_Manager.toIniString('dcb_dir', fnp.getRelDirPath(this.dcb_dir, this.prj_home), str_cell);
+            str_cell = Ini_Manager.toIniStringComment('Directory of BIAS files', str_cell);
+            str_cell = Ini_Manager.toIniString('bias_dir', fnp.getRelDirPath(this.bias_dir, this.prj_home), str_cell);
             str_cell = Ini_Manager.toIniStringNewLine(str_cell);
             str_cell = Ini_Manager.toIniStringComment('Directory of EMS files (EGNOS Message Server).', str_cell);
             str_cell = Ini_Manager.toIniString('ems_dir', fnp.getRelDirPath(this.ems_dir, this.prj_home), str_cell);
@@ -2713,9 +2753,9 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             str_cell = Ini_Manager.toIniString('tparam_coo_ppp', this.tparam_coo_ppp, str_cell);
             str_cell = Ini_Manager.toIniStringComment('Time parametrization coordimates network', str_cell);
             str_cell = Ini_Manager.toIniString('tparam_coo_net', this.tparam_coo_net, str_cell);
-            str_cell = Ini_Manager.toIniStringComment('Frequency paramterization coordinates PPP', str_cell);
+            str_cell = Ini_Manager.toIniStringComment('Frequency parametrization coordinates PPP', str_cell);
             str_cell = Ini_Manager.toIniString('fparam_coo_ppp', this.fparam_coo_ppp, str_cell);
-            str_cell = Ini_Manager.toIniStringComment('Frequency paramterization coordinates network', str_cell);
+            str_cell = Ini_Manager.toIniStringComment('Frequency parametrization coordinates network', str_cell);
             str_cell = Ini_Manager.toIniString('fparam_coo_net', this.fparam_coo_net, str_cell);
             str_cell = Ini_Manager.toIniStringComment('Rate coordinates PPP', str_cell);
             str_cell = Ini_Manager.toIniString('rate_coo_ppp', this.rate_coo_ppp, str_cell);
@@ -2755,9 +2795,9 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             str_cell = Ini_Manager.toIniString('flag_grad_ppp', this.flag_grad_ppp, str_cell);
             str_cell = Ini_Manager.toIniStringComment('Estimates ZTD gradients in network', str_cell);
             str_cell = Ini_Manager.toIniString('flag_grad_net', this.flag_grad_net, str_cell);
-            str_cell = Ini_Manager.toIniStringComment('Time paramterization ZTD gradients in PPP', str_cell);
+            str_cell = Ini_Manager.toIniStringComment('Time parametrization ZTD gradients in PPP', str_cell);
             str_cell = Ini_Manager.toIniString('tparam_grad_ppp', this.tparam_grad_ppp, str_cell);
-            str_cell = Ini_Manager.toIniStringComment('Time paramterization ZTD gradients in network', str_cell);
+            str_cell = Ini_Manager.toIniStringComment('Time parametrization ZTD gradients in network', str_cell);
             str_cell = Ini_Manager.toIniString('tparam_grad_net', this.tparam_grad_net, str_cell);
             str_cell = Ini_Manager.toIniStringComment('Rate ZTD gardients in PPP', str_cell);
             str_cell = Ini_Manager.toIniString('rate_grad_ppp', this.rate_grad_ppp, str_cell);
@@ -2813,9 +2853,9 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             str_cell = Ini_Manager.toIniString('flag_rec_ifbias_ppp', this.flag_rec_ifbias_ppp, str_cell);
             str_cell = Ini_Manager.toIniStringComment('Estimate receiver interfrequency bias in network', str_cell);
             str_cell = Ini_Manager.toIniString('flag_rec_ifbias_net', this.flag_rec_ifbias_net, str_cell);
-            str_cell = Ini_Manager.toIniStringComment('Time paramterization receiver interfrequency bias in PPP', str_cell);
+            str_cell = Ini_Manager.toIniStringComment('Time parametrization receiver interfrequency bias in PPP', str_cell);
             str_cell = Ini_Manager.toIniString('tparam_rec_ifbias_ppp', this.tparam_rec_ifbias_ppp, str_cell);
-            str_cell = Ini_Manager.toIniStringComment('Time paramterization receiver interfrequency bias in network', str_cell);
+            str_cell = Ini_Manager.toIniStringComment('Time parametrization receiver interfrequency bias in network', str_cell);
             str_cell = Ini_Manager.toIniString('tparam_rec_ifbias_net', this.tparam_rec_ifbias_net, str_cell);
             str_cell = Ini_Manager.toIniStringComment('Rate receiver interfrequency bias in PPP', str_cell);
             str_cell = Ini_Manager.toIniString('rate_rec_ifbias_ppp', this.rate_rec_ifbias_ppp, str_cell);
@@ -2833,9 +2873,9 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             str_cell = Ini_Manager.toIniString('flag_sat_ifbias_ppp', this.flag_sat_ifbias_ppp, str_cell);
             str_cell = Ini_Manager.toIniStringComment('Estimate satellite interfrequency bias in network', str_cell);
             str_cell = Ini_Manager.toIniString('flag_sat_ifbias_net', this.flag_sat_ifbias_net, str_cell);
-            str_cell = Ini_Manager.toIniStringComment('Time paramterization satellite interfrequency bias in PPP', str_cell);
+            str_cell = Ini_Manager.toIniStringComment('Time parametrization satellite interfrequency bias in PPP', str_cell);
             str_cell = Ini_Manager.toIniString('tparam_sat_ifbias_ppp', this.tparam_sat_ifbias_ppp, str_cell);
-            str_cell = Ini_Manager.toIniStringComment('Time paramterization satellite interfrequency bias in network', str_cell);
+            str_cell = Ini_Manager.toIniStringComment('Time parametrization satellite interfrequency bias in network', str_cell);
             str_cell = Ini_Manager.toIniString('tparam_sat_ifbias_net', this.tparam_sat_ifbias_net, str_cell);
             str_cell = Ini_Manager.toIniStringComment('Rate satellite interfrequency bias in PPP', str_cell);
             str_cell = Ini_Manager.toIniString('rate_sat_ifbias_ppp', this.rate_sat_ifbias_ppp, str_cell);
@@ -2853,9 +2893,9 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             str_cell = Ini_Manager.toIniString('flag_rec_trkbias_ppp', this.flag_rec_trkbias_ppp, str_cell);
             str_cell = Ini_Manager.toIniStringComment('Estimate receiver intertracking bias in network', str_cell);
             str_cell = Ini_Manager.toIniString('flag_rec_trkbias_net', this.flag_rec_trkbias_net, str_cell);
-            str_cell = Ini_Manager.toIniStringComment('Time paramterization receiver intertracking bias in PPP', str_cell);
+            str_cell = Ini_Manager.toIniStringComment('Time parametrization receiver intertracking bias in PPP', str_cell);
             str_cell = Ini_Manager.toIniString('tparam_rec_trkbias_ppp', this.tparam_rec_trkbias_ppp, str_cell);
-            str_cell = Ini_Manager.toIniStringComment('Time paramterization receiver intertracking bias in network', str_cell);
+            str_cell = Ini_Manager.toIniStringComment('Time parametrization receiver intertracking bias in network', str_cell);
             str_cell = Ini_Manager.toIniString('tparam_rec_trkbias_net', this.tparam_rec_trkbias_net, str_cell);
             str_cell = Ini_Manager.toIniStringComment('Rate receiver intertracking bias in PPP', str_cell);
             str_cell = Ini_Manager.toIniString('rate_rec_trkbias_ppp', this.rate_rec_trkbias_ppp, str_cell);
@@ -2873,9 +2913,9 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             str_cell = Ini_Manager.toIniString('flag_sat_trkbias_ppp', this.flag_sat_trkbias_ppp, str_cell);
             str_cell = Ini_Manager.toIniStringComment('Estimate satellite intertracking bias in network', str_cell);
             str_cell = Ini_Manager.toIniString('flag_sat_trkbias_net', this.flag_sat_trkbias_net, str_cell);
-            str_cell = Ini_Manager.toIniStringComment('Time paramterization satellite intertracking bias in PPP', str_cell);
+            str_cell = Ini_Manager.toIniStringComment('Time parametrization satellite intertracking bias in PPP', str_cell);
             str_cell = Ini_Manager.toIniString('tparam_sat_trkbias_ppp', this.tparam_sat_trkbias_ppp, str_cell);
-            str_cell = Ini_Manager.toIniStringComment('Time paramterization satellite intertracking bias in network', str_cell);
+            str_cell = Ini_Manager.toIniStringComment('Time parametrization satellite intertracking bias in network', str_cell);
             str_cell = Ini_Manager.toIniString('tparam_sat_trkbias_net', this.tparam_sat_trkbias_net, str_cell);
             str_cell = Ini_Manager.toIniStringComment('Rate satellite intertracking bias in PPP', str_cell);
             str_cell = Ini_Manager.toIniString('rate_sat_trkbias_ppp', this.rate_sat_trkbias_ppp, str_cell);
@@ -2976,7 +3016,6 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             log = Core.getLogger();
             if (exist(file_path, 'file') == 2)
                 this.importIniFile@Settings_Interface(file_path);
-                this.postImportInit();
                 log.addStatusOk(sprintf('File "%s" found, settings imported!', file_path));
             else
                 log.addWarning(sprintf('File "%s" not found, settings not imported!', file_path));
@@ -2988,7 +3027,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             %
             % SYNTAX
             %   this.importLegacyFile(file_path);
-                                           try                                                               
+            try
                 load(file_path, 'state');
                 this.legacyImport(state);
             catch ex
@@ -3231,9 +3270,11 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             this.checkLogicalField('flag_download');
             
             this.checkCellStringField('preferred_eph', EMPTY_IS_NOT_VALID);
-            this.checkCellStringField('preferred_iono', EMPTY_IS_NOT_VALID);
+            this.checkCellStringField('preferred_iono', EMPTY_IS_VALID);
             this.checkCellStringField('selected_orbit_center', EMPTY_IS_NOT_VALID);
             this.checkCellStringField('selected_iono_center', EMPTY_IS_NOT_VALID);
+            this.checkCellStringField('preferred_vmf_res', EMPTY_IS_NOT_VALID);
+            this.checkCellStringField('preferred_vmf_source', EMPTY_IS_NOT_VALID);
 
             this.checkStringField('sss_id_list', EMPTY_IS_NOT_VALID);
             this.checkStringField('sss_id_start', EMPTY_IS_NOT_VALID);
@@ -3267,7 +3308,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             this.checkPathField('erp_dir', EMPTY_IS_NOT_VALID);
             this.checkStringField('erp_name', EMPTY_IS_VALID);
             this.checkPathField('crx_dir', EMPTY_IS_NOT_VALID);
-            this.checkPathField('dcb_dir', EMPTY_IS_NOT_VALID);
+            this.checkPathField('bias_dir', EMPTY_IS_NOT_VALID);
             this.checkPathField('ems_dir', EMPTY_IS_VALID);
 
             %this.checkNumericField('rec_dyn_mode', [0 numel(this.DYN_MODE)-1]);
@@ -3485,13 +3526,13 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             this.sigma0_r_clock = this.SIGMA0_R_CLOCK;
             
             % Data filtering
-            this.min_p_epoch = 60;
+            this.min_p_epoch = 30;
             this.min_n_sat = 2;
             this.cut_off = 7;
             this.abs_snr_thr = 0;
             this.scaled_snr_thr = 0;
             this.min_arc = 300;
-            this.pp_max_code_err_thr = 10;
+            this.pp_max_code_err_thr = 50;
             this.max_code_err_thr = 10;
             this.max_phase_err_thr = 0.10;
             
@@ -3510,7 +3551,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             this.flag_amb_pass = 0; % (too much experimental)
             
             % Corrections
-            this.flag_clock_align = Prj_Settings.FLAG_CLOCK_ALIGN;;
+            this.flag_clock_align = Prj_Settings.FLAG_CLOCK_ALIGN;
             this.flag_solid_earth = 1;
             this.flag_pole_tide = 1;
             this.flag_phase_wind = 1;
@@ -3519,7 +3560,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             this.flag_atm_load = 1;
             this.flag_hoi = 1;
             this.flag_rec_pcv = 1;
-            this.flag_rec_mp = 1;
+            this.flag_rec_mp = 0;
             this.flag_apr_iono = 1;
             
             % Coordinates
@@ -3535,11 +3576,15 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             
             this.flag_free_net_tropo = 0;   % no reference in tropo est 
             
-            this.zd_model = 2;              % Use VMF for a-priori
-            this.mapping_function = 2;      % Use VMF grids
-            this.mapping_function_gradient = 2;      % Use chen and herring
+            this.zd_model = this.ZDM_VMF;              % Use VMF for a-priori
+            this.mapping_function = this.MF_VMF1;      % Use VMF grids
+            this.mapping_function_gradient = this.MFG_CHEN;  % Use chen and herring
 
             this.meteo_data = 2;            % Use GPT
+            
+            this.tparam_ztd_ppp  = 1;  % time parametrization of ztd   ppp
+            this.tparam_grad_ppp  = 1;  % time parametrization of ztd  gradient ppp
+
             
             % Regularization
             
@@ -3547,8 +3592,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             this.tropo_spatial_reg_d_distance = 25e3;
             this.tropo_gradient_spatial_reg_sigma = 1e-7;
             this.tropo_gradient_spatial_reg_d_distance = 25e3;
-                        
-                        
+                                    
             % Save Results
             this.flag_out_pwv = 1;
             this.flag_out_zwd = 1;
@@ -3581,13 +3625,13 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             this.sigma0_r_clock = this.SIGMA0_R_CLOCK;
             
             % Data filtering
-            this.min_p_epoch = 60;
+            this.min_p_epoch = 30;
             this.min_n_sat = 2;
             this.cut_off = 7;
             this.abs_snr_thr = 6;
             this.scaled_snr_thr = 28;
             this.min_arc = 300;
-            this.pp_max_code_err_thr = 10;
+            this.pp_max_code_err_thr = 50;
             this.max_code_err_thr = 10;
             this.max_phase_err_thr = 0.10;
             
@@ -3605,7 +3649,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             this.flag_amb_pass = 0; % (too much experimental)
             
             % Corrections
-            this.flag_clock_align = Prj_Settings.FLAG_CLOCK_ALIGN;;
+            this.flag_clock_align = Prj_Settings.FLAG_CLOCK_ALIGN;
             this.flag_solid_earth = 1;
             this.flag_pole_tide = 0;
             this.flag_phase_wind = 0;
@@ -3630,9 +3674,9 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
 
             this.flag_free_net_tropo = 0;
             
-            this.zd_model = 1;              % Use Saastamoinen for a-priori
-            this.mapping_function = 1;      % Use GMF grids
-                        this.mapping_function_gradient = 1;      % Use chen and herrign
+            this.zd_model = this.ZDM_SAAST;                      % Use Saastamoinen for a-priori
+            this.mapping_function = this.MF_GMF;                 % Use GMF grids
+            this.mapping_function_gradient = this.MFG_CHEN;      % Use chen and herrign
             this.meteo_data = 2;            % Use GPT
             
             % Regularization
@@ -3783,7 +3827,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             this.checkLogicalField('flag_out_res_ph');
             this.checkLogicalField('flag_out_mf');
             
-            % U2 paramterization
+            % U2 parametrization
             this.checkLogicalField('flag_coo_ppp');
             this.checkLogicalField('flag_coo_net');
             this.checkNumericField('tparam_coo_ppp',[1 100]);
@@ -3809,7 +3853,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             this.checkNumericField('dreg_ztd_net',[-2 1e50]);
             this.checkLogicalField('flag_grad_ppp');
             this.checkLogicalField('flag_grad_net');
-            this.checkNumericField('tparam_grad_ppp'),[1 100];
+            this.checkNumericField('tparam_grad_ppp',[1 100]);
             this.checkNumericField('tparam_grad_net',[1 100]);
             this.checkNumericField('rate_grad_ppp');
             this.checkNumericField('rate_grad_net');
@@ -3852,7 +3896,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             this.checkLogicalField('flag_phpr_sat_clock_net');
             this.checkNumericField('areg_sat_clock_ppp',[-2 1e50]);
             this.checkNumericField('areg_sat_clock_net',[-2 1e50]);
-            this.checkNumericField('dreg_sat_clock_ppp'),[-2 1e50];
+            this.checkNumericField('dreg_sat_clock_ppp',[-2 1e50]);
             this.checkNumericField('dreg_sat_clock_net',[-2 1e50]);
             this.checkLogicalField('flag_rec_ifbias_ppp');
             this.checkLogicalField('flag_rec_ifbias_net');
@@ -4099,19 +4143,124 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             end
         end
         
-        function preferred_eph = getPreferredEph(this)
+        function list_preferred = getPreferredEph(this, center_name)
             % get preferred ephemeris
             %
             % SYNTAX
             %   preferred_eph = getPreferredEph(this)
-            preferred_eph = this.preferred_eph;
-            if ~iscell(preferred_eph)
-                preferred_eph = {preferred_eph};
+            list_preferred = this.preferred_eph;
+            if ~iscell(list_preferred)
+                list_preferred = {list_preferred};
+            end
+            if nargin < 2 || isempty(center_name)
+                center_name = this.getCurCenter;
+            end
+            list_preferred = categorical(list_preferred);
+            fw = File_Wizard;
+            list_supported = categorical(this.PREFERRED_EPH(fw.rm.getOrbitType(center_name)));
+            list_preferred = intersect(list_preferred, list_supported);
+            if isempty(list_preferred)
+                list_preferred = list_supported;
+            end
+            flag = ismember(categorical(this.PREFERRED_EPH), list_preferred);
+            this.setPreferredOrbit(flag); % let's reset the preferred orbit
+            list_preferred = this.PREFERRED_EPH(flag);
+        end
+        
+        function flag = getPreferredOrbit(this)
+            % Get the preferred orbit sequence:
+            %   1 final
+            %   2 rapid
+            %   3 ultra rapid
+            %   4 broadcast
+            %   5 real-time
+            %
+            % OUPUT
+            %   flag is a logical array with 4 values (see above)
+            %
+            % SYNTAX
+            %   flag = this.getPreferredOrbit()
+            flag = false(5,1);
+            for i = 1 : numel(this.preferred_eph)
+                switch this.preferred_eph{i}
+                    case 'final', flag(1) = true;
+                    case 'rapid', flag(2) = true;
+                    case 'ultra', flag(3) = true;
+                    case 'broadcast', flag(4) = true;
+                    case 'real-time', flag(5) = true;
+                end
+            end            
+        end
+ 
+        function flag = getPreferredIono(this)
+            % Get the preferred iono sequence:
+            %   1 final
+            %   2 rapid
+            %   3 predicted 1
+            %   4 predicted 2
+            %   5 broadcast
+            %
+            % OUTPUT
+            %   flag is a logical array with 5 values (see above)
+            %
+            % SYNTAX
+            %   flag = this.getPreferredIono()
+            flag = false(5, 1);
+            for i = 1 : numel(this.preferred_iono)
+                switch this.preferred_iono{i}
+                    case 'final', flag(1) = true;
+                    case 'rapid', flag(2) = true;
+                    case 'predicted1', flag(3) = true;
+                    case 'predicted2', flag(4) = true;
+                    case 'broadcast', flag(5) = true;
+                end
+            end
+        end
+        
+        function flag = getPreferredVMFRes(this)
+            % Get the preferred VMF resolution:
+            %   1   1x1    VMF3
+            %   2 2.5x2    VMF1
+            %   3   5x5    VMF3
+            %
+            % OUTPUT
+            %   flag is a logical array with 3 values (see above)
+            %
+            % SYNTAX
+            %   flag = this.getPreferredVMFRes()
+            flag = false(3,1);
+            for i = 1 : numel(this.preferred_vmf_res)
+                switch this.preferred_vmf_res{i}
+                    case '1x1', flag(1) = true;
+                    case '2.5x2', flag(2) = true;
+                    case '5x5', flag(3) = true;
+                end
+            end
+        end
+        
+        function flag = getPreferredVMFSource(this)
+            % Get the preferred VMF source:
+            %   1 operational
+            %   2 era-interim
+            %   3 forecast
+            %
+            % OUTPUT
+            %   flag is a logical array with 4 values (see above)
+            %
+            % SYNTAX
+            %   flag = this.getPreferredIono()
+            flag = false(3,1);
+            for i = 1 : numel(this.preferred_vmf_source)
+                switch this.preferred_vmf_source{i}
+                    case 'operational', flag(1) = true;
+                    case 'era-interim', flag(2) = true;
+                    case 'forecast', flag(3) = true;
+                end
             end
         end
         
         function dir_path = getFileDir(this, filename)
-            % get file dir (form the resource name                                try                                                                to get the name of the iono)
+            % get file dir (form the resource name, try  to get the name of the iono)
             %
             % SYNTAX
             %   dir = getFileDir(this, filename)
@@ -4128,14 +4277,14 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             elseif instr(lower(ext),'.clk')
                 dir_path = this.getNavClkDir();
             elseif strcmpi(ext,'.CRX')
-                
+                dir_path = '';
+            elseif strcmpi(ext,'.BIA')
+                dir_path = this.getBiasDir();
             elseif ~isempty(regexp(ext,'\.\d\d[i|I]', 'once')) || ~isempty(regexp(ext,'\.\d\d[n|N]', 'once')) || strcmpi(ext,'.${YY}i') || strcmpi(ext,'.${YY}n') || strcmpi(name(1:4),'IFCz') || strcmpi(name(1:4),'SFCz')
                 dir_path = this.getIonoDir();
-            elseif strcmpi(ext,'.DCB') || (strcmpi(ext,'.BSX')) || (strcmpi(ext,'.BIA'))
-                dir_path = this.getDcbDir();
             elseif strcmpi(ext,'.apl')
                 dir_path = this.getAtmLoadDir();
-            elseif instr(name,'VMFG') && instr(ext,'.H')
+            elseif instr(name,'VMF') && instr(ext,'.H')
                 dir_path = this.getVMFDir();
             end            
         end
@@ -4251,7 +4400,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             %
             % SYNTAX
             %   file_name = this.getFullNavClkPath(id)
-            if isempty(this.clk_full_name)
+            if isempty(this.eph_full_name)
                 this.updateNavFileName();
             end
             file_name = this.clk_full_name;
@@ -4265,7 +4414,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             %
             % SYNTAX
             %   file_name = this.getFullErpPath(id)
-            if isempty(this.erp_full_name)
+            if isempty(this.eph_full_name)
                 this.updateErpFileName();
             end
             file_name = this.erp_full_name;
@@ -4320,12 +4469,12 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             cs_thr = this.CS_THR_PRE_PRO;
         end
 
-        function dcb_file = getDcbFile(this)
+        function out = getBiasFile(this)
             % Get the file name of the ERP files
             %
             % SYNTAX
-            %   erp_path = this.getErpPath()
-            dcb_file = this.dcb_name;
+            %   out = this.getBiasFile()
+            out = this.bias_name;
         end
 
         function out = getNavEphDir(this)
@@ -4352,35 +4501,35 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             out = this.erp_dir;
         end
 
-        function out = getDcbDir(this)
-            % Get the path to the DCB files
+        function out = getBiasDir(this)
+            % Get the path to the BIAS files
             %
             % SYNTAX
-            %   dcb_path = this.getDcbPath()
-            out = this.dcb_dir;
+            %   out = this.getBiasDir()
+            out = this.bias_dir;
         end
 
         function out = getIonoDir(this)
-            % Get the path to the DCB files
+            % Get the path to the Iono files
             %
             % SYNTAX
-            %   dcb_path = this.getDcbPath()
+            %   out = this.getIonoDir()
             out = this.iono_dir;
         end
         
         function out = getAtmLoadDir(this)
-            % Get the path to the DCB files
+            % Get the path to the atm loading files
             %
             % SYNTAX
-            %   dcb_path = this.getDcbPath()
+            %   out = this.getAtmLoadDir()
             out = this.atm_load_dir;
         end
         
         function out = getVMFDir(this)
-            % Get the path to the DCB files
+            % Get the path to the VMF files
             %
             % SYNTAX
-            %   dcb_path = this.getDcbPath()
+            %   out = this.getVMFDir()
             out = this.vmf_dir;
         end
 
@@ -4526,6 +4675,10 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             % SYNTAX
             %   out = this.getGeoidDir()
             out = File_Name_Processor.checkPath(strcat(this.geoid_dir, filesep), this.getHomeDir());
+            if ~(exist(out, 'dir') == 7) && (exist(this.GEOID_DIR_FALLBACK, 'dir') == 7)
+                out = this.GEOID_DIR_FALLBACK;
+            end
+            
         end
         
         function file_path = getGeoidFile(this)
@@ -4534,6 +4687,10 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             % SYNTAX
             %   file_path = this.getGeoidFile()
             file_path = File_Name_Processor.checkPath(strcat(this.geoid_dir, filesep, this.geoid_name), this.getHomeDir());
+            tmp = File_Name_Processor.checkPath(strcat(this.GEOID_DIR_FALLBACK, filesep, this.geoid_name), this.getHomeDir());
+            if ~(exist(file_path, 'file') == 2) && exist(tmp, 'file') == 2
+                file_path = tmp;
+            end
         end
 
         function out_dir = getOutDir(this)
@@ -4566,7 +4723,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             %
             % SYNTAX
             %    max_time = getMaxExecutionTimePar(this)
-            max_time = 7200;
+            max_time = 3600;
         end
 
         function updateOutPath(this, date, session)
@@ -4676,7 +4833,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             %  response = this.isRinexSession()
             response = this.sss_file_based;
         end
-       
+        
         function date = getSessionsStop(this)
             % Get the end of all the sessions
             % not considering buffer
@@ -4715,6 +4872,10 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             if nargin < 2
                 n = this.getCurSession();
             end
+            if n < 0
+                n = 1;
+            end
+            
             [buf_lft, but_rgt] = this.getBuffer();
             sss_lim = this.getSessionsStart;
             sss_lim.addSeconds((n-1) * this.sss_duration);
@@ -4776,15 +4937,55 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             % SYNTAX
             %   center_name = this.getCurCenter();
             center_name = this.selected_orbit_center;
+            if ~iscell(center_name)
+                center_name = {center_name};
+            end
         end
         
-        function center_name = getCurIonoCenter(this)
-            % Get the current orbit center
+        function setCurCenter(this, center_name)
+            % Set the current orbit center
             %
             % SYNTAX
-            %   center_name = this.getCurCenter();
-            center_name = this.selected_iono_center;
+            %   this.setCurCenter(center_name);
+            
+            % Check validity
+            if ischar(center_name)
+                center_name = {center_name};
+            end
+            
+            if ~strcmp(this.selected_orbit_center, center_name)
+                Core.getCoreSky(true); % Reset Core_Sky
+                fw = File_Wizard;
+                list_preferred = this.PREFERRED_EPH(fw.rm.getOrbitType(center_name));
+                this.setPreferredOrbit(list_preferred, center_name);
+            end
+            this.selected_orbit_center = center_name;
         end
+                
+        function center_name = getCurIonoCenter(this)
+            % Get the current iono center
+            %
+            % SYNTAX
+            %   center_name = this.getCurIonoCenter();
+            center_name = this.selected_iono_center;
+            if ~iscell(center_name)
+                center_name = {center_name};
+            end
+        end
+        
+        function setCurIonoCenter(this, center_name)
+            % Set the current iono center
+            %
+            % SYNTAX
+            %   this.setCurIonoCenter(center_name);
+            
+            % Check validity
+            if ischar(center_name)
+                center_name = {center_name};
+            end
+            
+            this.selected_iono_center = center_name;
+        end        
         
         function eph_full_name = getEphFileName(this, date_start, date_stop)
             % Get the full name of the ephemerides files (replacing special keywords)
@@ -4792,14 +4993,19 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             % SYNTAX
             %   eph_full_name = getEphFileName(this, date_start, date_stop)
             fnp = File_Name_Processor();
-            file_name = fnp.checkPath(strcat(this.eph_dir, filesep, this.eph_name), this.getHomeDir());
-            step_sec = min(3*3600, fnp.getStepSec(file_name)); %supposing a polynomial of degree 12 and SP3 orbit data every 15 min (at worst)
-
-            if (~isempty(strfind(file_name, fnp.GPS_WD)) || ~isempty(strfind(file_name, fnp.GPS_WEEK)))
-                date_start = date_start.getCopy; date_start.addIntSeconds(-step_sec); % Get navigational files with 6 hours of margin
-                date_stop = date_stop.getCopy; date_stop.addIntSeconds(+step_sec); % Get navigational files with 6 hours of margin
+            if isempty(this.eph_name)
+                eph_full_name = '';
+            else
+                file_name = fnp.checkPath(strcat(this.eph_dir, filesep, this.eph_name), this.getHomeDir());
+                step_sec = min(3*3600, fnp.getStepSec(file_name)); %supposing a polynomial of degree 12 and SP3 orbit data every 15 min (at worst)
+                
+                if (~isempty(strfind(file_name, fnp.GPS_WD)) || ~isempty(strfind(file_name, fnp.GPS_WEEK)))
+                    date_start = date_start.getCopy; date_start.addIntSeconds(-step_sec); % Get navigational files with 6 hours of margin
+                    date_stop = date_stop.getCopy; date_stop.addIntSeconds(+step_sec); % Get navigational files with 6 hours of margin
+                end
+                
+                eph_full_name = fnp.dateKeyRepBatch(file_name, date_start,  date_stop, this.sss_id_list, this.sss_id_start, this.sss_id_stop);
             end
-            eph_full_name = fnp.dateKeyRepBatch(file_name, date_start,  date_stop, this.sss_id_list, this.sss_id_start, this.sss_id_stop);
         end
         
          function met_full_name = getMetFileName(this, date_start, date_stop)
@@ -4831,14 +5037,18 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             % SYNTAX
             %   clk_full_name = getClkFileName(this, date_start, date_stop)
             fnp = File_Name_Processor();
-            file_name = fnp.checkPath(strcat(this.clk_dir, filesep, this.clk_name), this.getHomeDir());
-            step_sec = min(3*3600, fnp.getStepSec(file_name)); %supposing a polynomial of degree 12 and SP3 orbit data every 15 min (at worst)
-
-            if (~isempty(strfind(file_name, fnp.GPS_WD)) || ~isempty(strfind(file_name, fnp.GPS_WEEK)))
-                date_start = date_start.getCopy; date_start.addIntSeconds(-step_sec); % Get navigational files with 6 hours of margin
-                date_stop = date_stop.getCopy; date_stop.addIntSeconds(+step_sec); % Get navigational files with 6 hours of margin
+            if isempty(this.clk_name)
+                clk_full_name = '';
+            else
+                file_name = fnp.checkPath(strcat(this.clk_dir, filesep, this.clk_name), this.getHomeDir());
+                step_sec = min(3*3600, fnp.getStepSec(file_name)); %supposing a polynomial of degree 12 and SP3 orbit data every 15 min (at worst)
+                
+                if (~isempty(strfind(file_name, fnp.GPS_WD)) || ~isempty(strfind(file_name, fnp.GPS_WEEK)))
+                    date_start = date_start.getCopy; date_start.addIntSeconds(-step_sec); % Get navigational files with 6 hours of margin
+                    date_stop = date_stop.getCopy; date_stop.addIntSeconds(+step_sec); % Get navigational files with 6 hours of margin
+                end
+                clk_full_name = fnp.dateKeyRepBatch(file_name, date_start, date_stop, this.sss_id_list, this.sss_id_start, this.sss_id_stop);
             end
-            clk_full_name = fnp.dateKeyRepBatch(file_name, date_start, date_stop, this.sss_id_list, this.sss_id_start, this.sss_id_stop);
         end
 
         function erp_full_name = getErpFileName(this, date_start, date_stop)
@@ -4847,33 +5057,41 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             % SYNTAX
             %   erp_full_name = getErpFileName(this, date_start, date_stop)
             fnp = File_Name_Processor();
-            file_name = fnp.checkPath(strcat(this.erp_dir, filesep, this.erp_name), this.getHomeDir());
-
-            if (~isempty(strfind(file_name, fnp.GPS_WD)) || ~isempty(strfind(file_name, fnp.GPS_WEEK)))
-                date_start = date_start.getCopy;
-                date_stop = date_stop.getCopy;
+            if isempty(this.erp_name)
+                erp_full_name = '';
+            else
+                file_name = fnp.checkPath(strcat(this.erp_dir, filesep, this.erp_name), this.getHomeDir());
+                
+                if (~isempty(strfind(file_name, fnp.GPS_WD)) || ~isempty(strfind(file_name, fnp.GPS_WEEK)))
+                    date_start = date_start.getCopy;
+                    date_stop = date_stop.getCopy;
+                end
+                erp_full_name = fnp.dateKeyRepBatch(file_name, date_start, date_stop, this.sss_id_list, this.sss_id_start, this.sss_id_stop);
             end
-            erp_full_name = fnp.dateKeyRepBatch(file_name, date_start, date_stop, this.sss_id_list, this.sss_id_start, this.sss_id_stop);
         end
         
-        function erp_full_name = getBiasFileName(this, date_start, date_stop)
-            % Get the full name of the DCB files (replacing special keywords)
+        function bias_full_name = getBiasFileName(this, date_start, date_stop)
+            % Get the full name of the BIAS files (replacing special keywords)
             %
             % SYNTAX
-            %   erp_full_name = getErpFileName(this, date_start, date_stop)
+            %   bias_full_name = getBiasFileName(this, date_start, date_stop)
             fnp = File_Name_Processor();
-            file_name = fnp.checkPath(strcat(this.dcb_dir, filesep, this.dcb_name), this.getHomeDir());
-
-            if (~isempty(strfind(file_name, fnp.GPS_WD)) || ~isempty(strfind(file_name, fnp.GPS_WEEK)))
-                date_start = date_start.getCopy;
-                date_stop = date_stop.getCopy;
+            if isempty(this.bias_name)
+                bias_full_name = '';
+            else
+                file_name = fnp.checkPath(strcat(this.bias_dir, filesep, this.bias_name), this.getHomeDir());
+                
+                if (~isempty(strfind(file_name, fnp.GPS_WD)) || ~isempty(strfind(file_name, fnp.GPS_WEEK)))
+                    date_start = date_start.getCopy;
+                    date_stop = date_stop.getCopy;
+                end
+                bias_full_name = fnp.dateKeyRepBatch(file_name, date_start, date_stop, this.sss_id_list, this.sss_id_start, this.sss_id_stop);
             end
-            erp_full_name = fnp.dateKeyRepBatch(file_name, date_start, date_stop, this.sss_id_list, this.sss_id_start, this.sss_id_stop);
         end
 
 
         function iono_full_name = getIonoFileName(this, date_start, date_stop)
-            % Get the full name of the ERP files (replacing special keywords)
+            % Get the full name of the Iono files (replacing special keywords)
             %
             % SYNTAX
             %   erp_full_name = getErpFileName(this, date_start, date_stop)
@@ -4933,14 +5151,20 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             step_s = fnp.getStepSec(file_name);
             date_start.addSeconds(-step_s);
             date_stop.addSeconds(step_s);
-            vmf_full_name = fnp.dateKeyRepBatch(file_name, date_start, date_stop, this.sss_id_list, this.sss_id_start, this.sss_id_stop);
+            vmf_full_name = fnp.dateKeyRepBatch(file_name, date_start, date_stop, this.sss_id_list, this.sss_id_start, this.sss_id_stop, this.vmf_res, upper(this.vmf_source));
         end
         
         function vmf_height_name = getVMFHeightFileName(this)
             % Get the full name of the ERP files (replacing special keywords)
             % SYNTAX: erp_full_name = getErpFileName(this, date_start, date_stop)
             fnp = File_Name_Processor();
-            vmf_height_name = fnp.checkPath(strcat(strrep(this.vmf_dir, '${YYYY}',''), filesep, 'orography_ell'), this.getHomeDir());
+            if strcmpi(this.vmf_res,'2.5x2')
+                vmf_height_name = fnp.checkPath(strcat(strrep(strrep(strrep(this.vmf_dir, '${YYYY}',''), '${VMFR}',''), '${VMFS}',''), filesep, 'orography_ell'), this.getHomeDir());
+            elseif strcmpi(this.vmf_res,'1x1')
+                vmf_height_name = fnp.checkPath(strcat(strrep(strrep(strrep(this.vmf_dir, '${YYYY}',''), '${VMFR}',''), '${VMFS}',''), filesep, 'orography_ell_1x1'), this.getHomeDir());
+            elseif strcmpi(this.vmf_res,'5x5')
+                vmf_height_name = fnp.checkPath(strcat(strrep(strrep(strrep(this.vmf_dir, '${YYYY}',''), '${VMFR}',''), '${VMFS}',''), filesep, 'orography_ell_5x5'), this.getHomeDir());
+            end
 
         end
 
@@ -4977,7 +5201,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             elseif ~isempty(regexpi(ext,'.erp*'))
                 this.setErpFile(filename);
             elseif strcmpi(ext,'.bia') || strcmpi(ext,'.BIA')
-                this.setDcbFile(filename);
+                this.setBiasFile(filename);
             elseif instr(lower(ext),'.clk')
                 this.setNavClkFile(filename);
             elseif strcmpi(ext,'.CRX')
@@ -4985,9 +5209,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
                 this.setAtmLoadFile(filename);
             elseif (~isempty(regexp(ext,'\.\d\di', 'once')) || strcmpi(ext,'.${YY}i') || strcmpi(ext,'.${YY}p')) || ~isempty(strfind(resouce_name,'iono'))  %#ok<STREMP>
                 this.setIonoFile(filename);
-            elseif strcmpi(ext,'.DCB') || (strcmpi(ext,'.SNX') && strcmpi(name(1:3),'DCB'))
-                this.setDcbFile(filename);
-            elseif instr(fname,'VMFG_')
+            elseif instr(fname,'VMF')
                 this.setVMFFile(filename);
             end
         end
@@ -5012,6 +5234,14 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             end
         end
 
+        function setCrxDir(this, crx_dir)
+            % Set the path of the file containing problematic satellites
+            %
+            % SYNTAX
+            %   this.setCrxDir(crx_dir)
+            this.crx_dir = crx_dir;
+        end
+        
         function setNavPath(this, nav_dir)
             % Set the path to the navigational files
             %
@@ -5028,6 +5258,17 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             this.met_dir = met_dir;
         end
 
+        function resetNavNames(this)
+            % Reset nav files (eph, clk, erp, bias)
+            %
+            % SYNTAX
+            %   this.resetNavNames()
+            this.setNavEphFile('');
+            this.setNavClkFile('');
+            this.setErpPath('');
+            this.setBiasFile('');
+        end
+        
         function setNavEphFile(this, nav_name)
             % Set the file name of the navigational files
             %
@@ -5068,11 +5309,11 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             this.erp_name = erp_name;
         end
 
-        function setDcbFile(this, dcb_name)
+        function setBiasFile(this, bias_name)
             % Set the file name of the clock files
             % SYNTAX
             %   this.getClkFile(erp_name)
-            this.dcb_name = dcb_name;
+            this.bias_name = bias_name;
         end
 
         function setIonoFile(this, iono_file)
@@ -5132,6 +5373,22 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             end
         end
 
+        function obs_full_name = getObsFileName(this, date_start, date_stop)
+            % Get the full name of the observations files (replacing special keywords)
+            %
+            % SYNTAX
+            %   this.getObsFileName(date_start, date_stop);
+            obs_full_name = {};
+            fnp = File_Name_Processor();
+            if ~iscell(this.obs_name)
+                this.obs_name = {this.obs_name};
+            end
+            home_dir = this.getHomeDir(); % cache home dir name
+            for i = 1 : numel(this.obs_name)
+                path_list = fnp.checkPath(strcat(this.obs_dir, filesep, this.obs_name{i}), home_dir);
+                obs_full_name{i} = fnp.dateKeyRepBatch(path_list, date_start,  date_stop, this.sss_id_list, this.sss_id_start, this.sss_id_stop);
+            end
+        end
         function updateMetFileName(this)
             % Update the full name of the observations files (replacing special keywords)
             %
@@ -5156,6 +5413,10 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             %   this.updateNavFileName();
             this.updateEphFileName();
             this.updateClkFileName();
+            this.updateErpFileName();
+            %this.getFullNavEphPath
+            %this.getFullNavClkPath
+            %this.getFullErpPath
         end
 
         function updateEphFileName(this)
@@ -5246,36 +5507,112 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             this.flag_no_resources = flag;
         end
         
-        function setPreferredOrbit(this, flag)
+        function setPreferredOrbit(this, flag, center_name)
             % Set the preferred orbit sequence:
             %   1 final
             %   2 rapid
             %   3 ultra rapid
             %   4 broadcast
+            %   5 real-time
             %
             % INPUT
             %   flag is a logical array with 4 values (see above)
             %
             % SYNTAX
             %   this.setPreferredOrbit(flag)
-            eph = {'final', 'rapid', 'ultra', 'broadcast'};
-            this.preferred_eph = eph(flag);
+            flag_name = this.PREFERRED_EPH;
+            if ischar(flag)
+                flag = ismember(flag_name, {flag});
+            end
+            if iscell(flag)
+                flag = ismember(flag_name, flag);
+            end
+            flag_reset = true;
+            if nargin < 3 || isempty(center_name)
+                center_name = this.getCurCenter;
+                flag_reset = false; % if the center is not changed, no need to refresh full file names with conjuring
+            else
+                if ~strcmp(this.selected_orbit_center, center_name)
+                    flag_reset = true; % if the center is changed, refresh full file names with conjuring
+                end
+            end
+            if ~islogical(flag)
+                if sum(flag == 0 | flag == 1) == 5
+                    flag = logical(flag);
+                else
+                    tmp = false(5,1);
+                    tmp(flag) = true;
+                    flag = tmp;
+                end
+            end
+            
+            if ~strcmp(this.preferred_eph{1}, flag_name{find(flag, 1, 'first')}) || flag_reset
+                Core.getCoreSky(true); % Reset Core_Sky
+                fw = File_Wizard;
+                this.resetNavNames();
+                fw.conjureResource(flag_name{find(flag, 1, 'first')}, this.getSessionsStartExt, this.getSessionsStopExt, center_name, false);
+                this.updateNavFileName();
+            end
+            
+            this.preferred_eph = flag_name(flag);
         end
  
         function setPreferredIono(this, flag)
             % Set the preferred iono sequence:
             %   1 final
-            %   2 predicted 1
-            %   3 predicted 2
-            %   4 broadcast
+            %   2 rapid
+            %   3 predicted 1
+            %   4 predicted 2
+            %   5 broadcast
             %
             % INPUT
-            %   flag is a logical array with 4 values (see above)
+            %   flag is a logical array with 5 values (see above)
             %
             % SYNTAX
             %   this.setPreferredIono(flag)
-            iono = {'final', 'predicted1', 'predicted2', 'broadcast'};
-            this.preferred_iono = iono(flag);
+            flag_name = {'final', 'rapid', 'predicted1', 'predicted2', 'broadcast'};
+            if ischar(flag)
+                flag = ismember(flag_name, {flag});
+            end
+            if iscell(flag)
+                flag = ismember(flag_name, {flag});
+            end
+            if ~islogical(flag)
+                tmp = false(5,1);
+                tmp(flag) = true;
+                flag = tmp;
+            end
+            this.preferred_iono = flag_name(flag);
+        end
+        
+         function setPreferredVMFRes(this, flag)
+            % Set the preferred VMF resolution:
+            %   1   1x1    VMF3
+            %   2 2.5x2    VMF1
+            %   3   5x5    VMF3
+            %
+            % INPUT
+            %   flag is a logical array with 3 values (see above)
+            %
+            % SYNTAX
+            %   this.setPreferredVMFRes(flag)
+            iono = {'1x1', '2.5x2', '5x5'};
+            this.preferred_vmf_res = iono(flag);
+         end
+        
+          function setPreferredVMFSource(this, flag)
+            % Set the preferred VMF source:
+            %   1 operational
+            %   2 era-interim
+            %   3 forecast
+            %
+            % INPUT
+            %   flag is a logical array with 3 values (see above)
+            %
+            % SYNTAX
+            %   this.setPreferredVMFSource(flag)
+            iono = {'operational', 'era-interim', 'forecast'};
+            this.preferred_vmf_source = iono(flag);
         end
  
         function setPrjHome(this, prj_home)
@@ -5336,6 +5673,23 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             this.cur_ini = fullfile(path_str, [name '.ini']);
         end
 
+        function setRinexSession(this, flag)
+            % set wether the program is using session based on rinex files
+            %
+            % SYNTAX
+            %  this.isRinexSession()
+            this.sss_file_based = flag;
+        end
+        
+        function setMaxErrPP(this, max_thr)
+            % Set the maximum s0 error acceptable on LS pre-processing solution
+            % Quantity in meters
+            %
+            % SYNTAX
+            %   this.setMaxCodeErrThrPP(max_thr)
+            this.pp_spp_thr = max_thr;
+        end
+        
         function updatePrj(this, file_path)
             % Set the file project name / home / file_path from file_path
             %
@@ -5400,7 +5754,10 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             % Get the id of the current session
             %
             % SYNTAX
-            %   cur_session = this.getCurSession()            
+            %   cur_session = this.getCurSession()
+            if isempty(this.cur_session)
+                this.cur_session = 1;
+            end
             cur_session = this.cur_session;
         end
 
@@ -5557,7 +5914,31 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             %
             % SYNTAX
             %   is_vmf = this.isVMF()
-            is_vmf = this.mapping_function == 2 || this.zd_model == 2;
+            is_vmf = this.mapping_function == this.MF_VMF1 || this.mapping_function == this.MF_VMF3_1 || this.mapping_function == this.MF_VMF3_5 || this.zd_model == this.ZDM_VMF;
+        end
+        
+        function setMappingFunction(this, mf)
+            % Set the current mapping function
+            %
+            % INPUT
+            %   mf      mapping function id chose among the following constants:
+            %             MF_GMF = 1
+            %             MF_VMF1 = 2
+            %             MF_NIEL = 3
+            %             MF_VMF3_1 = 4
+            %             MF_VMF3_5 = 5
+            %
+            % SYNTAX
+            %  this. setMappingFunction(mf);
+            this.mapping_function = mf;
+        end
+        
+        function setAtmLoading(this, flag)
+            % Set the athmospheric loading correction is enabled
+            %
+            % SYNTAX
+            %   this.setAtmLoading(flag)
+            this.flag_atm_load = flag;
         end
         
         function is_seamless = isSeamlessKF(this)
@@ -5895,53 +6276,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             %   flag = this.isBlockOneArc()
             flag = this.block_one_arc;
         end
-        
-        function flag = getPreferredOrbit(this)
-            % Set the preferred orbit sequence:
-            %   1 final
-            %   2 rapid
-            %   3 ultra rapid
-            %   4 broadcast
-            %
-            % OUPUT
-            %   flag is a logical array with 4 values (see above)
-            %
-            % SYNTAX
-            %   flag = this.getPreferredOrbit()
-            flag = false(4,1);
-            for i = 1 : numel(this.preferred_eph)
-                switch this.preferred_eph{i}
-                    case 'final', flag(1) = true;
-                    case 'rapid', flag(2) = true;
-                    case 'ultra', flag(3) = true;
-                    case 'broadcast', flag(4) = true;
-                end
-            end            
-        end
- 
-        function flag = getPreferredIono(this)
-            % Get the preferred iono sequence:
-            %   1 final
-            %   2 predicted 1
-            %   3 predicted 2
-            %   4 broadcast
-            %
-            % OUTPUT
-            %   flag is a logical array with 4 values (see above)
-            %
-            % SYNTAX
-            %   flag = this.getPreferredIono()
-            flag = false(4,1);
-            for i = 1 : numel(this.preferred_iono)
-                switch this.preferred_iono{i}
-                    case 'final', flag(1) = true;
-                    case 'predicted1', flag(2) = true;
-                    case 'predicted2', flag(3) = true;
-                    case 'broadcast', flag(4) = true;
-                end
-            end
-        end
-        
+                
         function rate = getTropoOutRate(this)
             % Get the output rate of tropo to be used in PUSHOUT commands
             %

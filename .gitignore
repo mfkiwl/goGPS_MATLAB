@@ -34,9 +34,10 @@
 !/data/satellite/SBAS/EMS
 /data/satellite/SBAS/EMS/*
 !/data/satellite/SBAS/EMS/.gitignore
-!/data/satellite/DCB
-/data/satellite/DCB/*
-!/data/satellite/DCB/.gitignore
+/data/satellite/DCB
+!/data/satellite/BIAS
+/data/satellite/BIAS/*
+!/data/satellite/BIAS/.gitignore
 
 !/data/reference/ATM_LOAD
 /data/reference/ATM_LOAD/*
@@ -69,6 +70,9 @@
 !/data/reference/VMF/.gitignore
 !/data/reference/VMF/orography
 !/data/reference/VMF/orography_ell
+!/data/reference/VMF/orography_ell_1x1
+!/data/reference/VMF/orography_ell_5x5
+
 
 
 !/data/station
@@ -148,6 +152,7 @@
 /data/old/settings/*
 !/data/old/settings/goGPS_iniDefaultKeywords.ini
 last_settings.ini
+credentials.txt
 /goGPS/bin
 /goGPS/com
 /goGPS/logs
@@ -195,3 +200,5 @@ goGPS/utility/thirdParty/m_map/m_etopo2.m
 goGPS/mex/
 
 goGPS/files.lst
+
+goGPS/credentials.txt

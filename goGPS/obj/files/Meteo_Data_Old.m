@@ -16,7 +16,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
@@ -111,7 +111,7 @@ classdef Meteo_Data_Old < handle
         data = [];          % Meteorological file
 
         xyz = [0 0 0];      % geocentric coordinate of the sensor
-        amsl = 0;           % hortometric height of the sensor
+        amsl = 0;           % orthometric height of the sensor
         is_valid = false;   % Status of valitity of the file;
         
         max_bound = 90;     % Max bound to extrapolate
@@ -175,8 +175,8 @@ classdef Meteo_Data_Old < handle
                             if pos_is_present
                                 this.xyz = sscanf(line(1:42), '%14f%14f%14f');
                                 if sum(abs(this.xyz)) > 0
-                                    [~, lam, h, phiC] = cart2geod(this.xyz(1), this.xyz(2), this.xyz(3));
-                                    this.amsl = h - getOrthometricCorr(phiC, lam);
+                                    [phi, lam, h, phi] = cart2geod(this.xyz(1), this.xyz(2), this.xyz(3));
+                                    this.amsl = h - getOrthometricCorr(phi, lam);
                                 else
                                     this.amsl = 0;
                                 end
@@ -338,8 +338,8 @@ classdef Meteo_Data_Old < handle
             % Skip NaN epochs
             this.marker_name = marker_name;
             this.xyz = pos_xyz;
-            [~, lam, h, phiC] = cart2geod(this.xyz(1), this.xyz(2), this.xyz(3));
-            this.amsl = h - getOrthometricCorr(phiC, lam);
+            [phi, lam, h] = cart2geod(this.xyz(1), this.xyz(2), this.xyz(3));
+            this.amsl = h - getOrthometricCorr(phi, lam);
             ok = ~obs_time.isnan();
             this.data = data(ok, :);
             this.type = type;
@@ -633,10 +633,10 @@ classdef Meteo_Data_Old < handle
             log = Logger.getInstance();
 
             md = Meteo_Data_Old();
-            [~, lam, h, phiC] = cart2geod(xyz(1), xyz(2), xyz(3));
+            [phi, lam, h] = cart2geod(xyz(1), xyz(2), xyz(3));
             [e, n] = cart2plan(xyz(1), xyz(2), xyz(3));
 
-            amsl = h - getOrthometricCorr(phiC, lam);
+            amsl = h - getOrthometricCorr(phi, lam);
 
             n_station = numel(station);
 

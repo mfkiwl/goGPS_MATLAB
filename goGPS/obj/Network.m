@@ -15,7 +15,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
@@ -43,8 +43,6 @@
 classdef Network < handle
     properties
         rec_list
-        state
-        cc
         net_id           % id of the receiver in core, this uniquely identify the network
         
         common_time      % gps_time
@@ -85,8 +83,6 @@ classdef Network < handle
         end
         
         function init(this)
-            this.state = Core.getState;
-            this.cc = this.state.cc;
             this.log = Core.getLogger();
         end
         
@@ -111,30 +107,39 @@ classdef Network < handle
             this.wl_comb_codes = [];
         end
                 
-        function adjustNew(this, id_ref, coo_rate, reduce_iono, export_clk, free_net)
+        function adjustNew(this, id_ref, coo_rate, free_net, mp_type)
             % Adjust the GNSS network
             %
             % INPUT
-            %     id_ref : [1,n_rec]  receivers numeric index to be choosen as reference, their value mean will be set to zero
+            %   id_ref : [1,n_rec]  receivers numeric index to be choosen as reference, their value mean will be set to zero
             %   coo_rate : rate of the solution
-            %reduce_iono : reduce for ionospheric delay
+            %   free_net : process in free net mode
+            %   mp_tye   : apply multipath to baselines 
             %
             % SYNATAX
             %    this. adjustNetwork(id_ref, <coo_rate>, <reduce_iono>)
+            
+            state = Core.getState;
             if nargin < 3
                 coo_rate = [];
             end
-            if nargin < 4
-                reduce_iono = false;
-            end
-            if nargin < 5
-                export_clk = false;
-            end
             
-            if nargin < 6
+            if nargin < 4 || isempty(free_net)
                 free_net = false;
             end
             
+            if nargin < 4 || isempty(mp_type)
+                mp_type = 0;
+            end
+            
+            recs = Core.getRecList();
+            
+            for i = 1 : length(recs)
+                if ~recs(i).work.isEmpty
+                    %this.rec_list(i).work.remGroupDelay(); % apply the new clock
+                    recs(i).work.remGroupDelayNew();
+                end
+            end
             
             
             if nargin < 2 || any(isnan(id_ref)) || isempty(id_ref)
@@ -156,7 +161,7 @@ classdef Network < handle
             else
                 % if iono reduction is requested take off single frequency
                 % receiver
-                if this.state.flag_iono_net
+                if state.flag_iono_net
                     r = 1;
                     while (r <= length(this.rec_list))
                         if ~this.rec_list(r).work.isMultiFreq
@@ -179,7 +184,7 @@ classdef Network < handle
                     [~, id_ref] = intersect(this.net_id, id_ref);
                     lid_ref(id_ref) = true;
                 end
-                l_fixed = 0; % nothing is Fise
+                l_fixed = 0; % nothing is Fixed
                 is_empty_recs = ~this.rec_list.hasRangeObs_mr;
                 e = find(is_empty_recs);
                 if ~isempty(e)
@@ -189,279 +194,356 @@ classdef Network < handle
                 id_ref = find(lid_ref);
                 this.id_ref = id_ref;
                 
-                if this.state.getReweightNET() < 2
+                if state.getReweightNET() < 2
                     n_clean = 0;
                 else
                     this.log.addMessage(this.log.indent('Network solution performing 4 loops of outlier detection on the residuals'), 2);
                     n_clean = 3;
                 end
                 
-                ls = LS_Manipulator_new();
-                phase = true;
-                
-                parametrization = LS_Parametrization();
-                
-                if phase
-                    param_selection =  [ls.PAR_AMB];
-                else
-                    param_selection =  [];
-                end
-                state = this.state;
-                if this.state.flag_coo_net
-                    param_selection = [param_selection;
-                        LS_Manipulator_new.PAR_REC_X;
-                        LS_Manipulator_new.PAR_REC_Y;
-                        LS_Manipulator_new.PAR_REC_Z;
-                        ];
+                % If buffers are present perform a mximum of two iterations (one with them,
+                % one without) otherwise just loop once
+                flag_try = iif(numel(state.getBuffer) == 1 && (state.getBuffer == 0), 1, 2); 
+                while flag_try > 0
+                    ls = LS_Manipulator_new();
+                    phase = true;
                     
-                    % time parametrization coordinates
-                    parametrization.rec_x(1) = state.tparam_coo_net;
-                    parametrization.rec_y(1) = state.tparam_coo_net;
-                    parametrization.rec_z(1) = state.tparam_coo_net;
+                    parametrization = LS_Parametrization();
                     
-                    
-                    parametrization.rec_x(4) = state.fparam_coo_net;
-                    parametrization.rec_y(4) = state.fparam_coo_net;
-                    parametrization.rec_z(4) = state.fparam_coo_net;
-                end
-                %if this.state.flag_iono_net
-                param_selection = [param_selection;
-                    ls.PAR_IONO;];
-                %end
-                if this.state.flag_ztd_net
-                    param_selection = [param_selection;
-                        ls.PAR_TROPO;];
-                end
-                
-                if this.state.flag_grad_net
-                    param_selection = [param_selection;
-                        ls.PAR_TROPO_N;
-                        ls.PAR_TROPO_E;];
-                end
-                
-                  glonass_r_sum = 0;
-                for i = 1 : length(this.rec_list)
-                    if sum(this.rec_list(i).work.system == 'R') > 0
-                        glonass_r_sum = glonass_r_sum + 1;
-                    end
-                end
-                if glonass_r_sum && false
-                    param_selection = [param_selection;
-                        ls.PAR_REC_EB_LIN;];
-                end
-                if state.flag_rec_clock_net
-                    if state.flag_phpr_rec_clock_net
-                        param_selection =  [param_selection;
-                            LS_Manipulator_new.PAR_REC_CLK_PR;
-                            LS_Manipulator_new.PAR_REC_CLK_PH;
-                            ];
+                    if phase
+                        param_selection =  [ls.PAR_AMB];
                     else
-                        param_selection =  [param_selection;
-                            LS_Manipulator_new.PAR_REC_CLK;
-                            LS_Manipulator_new.PAR_REC_PPB;
-                            ];
+                        param_selection =  [];
                     end
-                end
-                if state.flag_sat_clock_net
-                    if state.flag_phpr_sat_clock_net
-                        param_selection =  [param_selection;
-                            LS_Manipulator_new.PAR_SAT_CLK_PR;
-                            LS_Manipulator_new.PAR_SAT_CLK_PH;
+                    if state.flag_coo_net
+                        param_selection = [param_selection;
+                            LS_Manipulator_new.PAR_REC_X;
+                            LS_Manipulator_new.PAR_REC_Y;
+                            LS_Manipulator_new.PAR_REC_Z;
                             ];
+                        
+                        % time parametrization coordinates
+                        parametrization.rec_x(1) = state.tparam_coo_net;
+                        parametrization.rec_y(1) = state.tparam_coo_net;
+                        parametrization.rec_z(1) = state.tparam_coo_net;
+                        
+                        % tracking parametrization
+                        parametrization.rec_x(4) = state.fparam_coo_net;
+                        parametrization.rec_y(4) = state.fparam_coo_net;
+                        parametrization.rec_z(4) = state.fparam_coo_net;
+                    end
+                    orbit_relaxation = false;
+                    if orbit_relaxation
+                        param_selection = [param_selection;
+                            LS_Manipulator_new.PAR_SAT_X;
+                            LS_Manipulator_new.PAR_SAT_Y;
+                            LS_Manipulator_new.PAR_SAT_Z;
+                            ];
+                     
+                    end
+                    
+                    %if state.flag_iono_net
+                    param_selection = [param_selection;
+                        ls.PAR_IONO;];
+                    %end
+                    if state.flag_ztd_net
+                        param_selection = [param_selection;
+                            ls.PAR_TROPO;];
+                    end
+                    
+                    if state.flag_grad_net
+                        param_selection = [param_selection;
+                            ls.PAR_TROPO_N;
+                            ls.PAR_TROPO_E;];
+                    end
+                    
+                    glonass_r_sum = 0;
+                    for i = 1 : length(this.rec_list)
+                        if sum(this.rec_list(i).work.system == 'R') > 0
+                            glonass_r_sum = glonass_r_sum + 1;
+                        end
+                    end
+                    if glonass_r_sum && false
+                        param_selection = [param_selection;
+                            ls.PAR_REC_EB_LIN;];
+                    end
+                    if state.flag_rec_clock_net
+                        if state.flag_phpr_rec_clock_net
+                            param_selection =  [param_selection;
+                                LS_Manipulator_new.PAR_REC_CLK_PR;
+                                LS_Manipulator_new.PAR_REC_CLK_PH;
+                                ];
+                        else
+                            param_selection =  [param_selection;
+                                LS_Manipulator_new.PAR_REC_CLK;
+                               % LS_Manipulator_new.PAR_REC_PPB;
+                                ];
+                        end
+                    end
+                    if state.flag_sat_clock_net
+                        if state.flag_phpr_sat_clock_net
+                            param_selection =  [param_selection;
+                                LS_Manipulator_new.PAR_SAT_CLK_PR;
+                                LS_Manipulator_new.PAR_SAT_CLK_PH;
+                                ];
+                        else
+                            param_selection =  [param_selection;
+                                LS_Manipulator_new.PAR_SAT_CLK;
+                             %   LS_Manipulator_new.PAR_SAT_PPB;
+                                ];
+                        end
+                    end
+                    
+                    if state.flag_rec_trkbias_net
+                        param_selection =  [param_selection;
+                            LS_Manipulator_new.PAR_REC_EB;];
+                        parametrization.setTimeParametrization(LS_Manipulator_new.PAR_REC_EB, state.tparam_rec_trkbias_net );
+                        if state.tparam_rec_trkbias_net > 1 && state.rate_rec_trkbias_net > 0
+                            parametrization.setRate(LS_Manipulator_new.PAR_REC_EB, state.rate_rec_trkbias_net );
+                        end
+                        
+                    end
+                    
+                    if state.flag_rec_ifbias_net
+                        param_selection =  [param_selection;
+                            LS_Manipulator_new.PAR_REC_EBFR;];
+                        parametrization.setTimeParametrization(LS_Manipulator_new.PAR_REC_EBFR, state.tparam_rec_ifbias_net );
+                        if state.tparam_rec_ifbias_net > 1 && state.rate_rec_ifbias_net > 0
+                            parametrization.setRate(LS_Manipulator_new.PAR_REC_EBFR, state.rate_rec_ifbias_net );
+                        end
+                    end
+                    
+                    if state.flag_sat_trkbias_net
+                        param_selection =  [param_selection;
+                            LS_Manipulator_new.PAR_SAT_EB;];
+                        parametrization.setTimeParametrization(LS_Manipulator_new.PAR_SAT_EB, state.tparam_sat_trkbias_net );
+                        if state.tparam_sat_trkbias_net > 1 && state.rate_sat_trkbias_net > 0
+                            parametrization.setRate(LS_Manipulator_new.PAR_SAT_EB, state.rate_sat_trkbias_net );
+                        end
+                        
+                    end
+                    
+                    if state.flag_sat_ifbias_net
+                        param_selection =  [param_selection;
+                            LS_Manipulator_new.PAR_SAT_EBFR;];
+                        parametrization.setTimeParametrization(LS_Manipulator_new.PAR_SAT_EBFR, state.tparam_sat_ifbias_net );
+                        if state.tparam_sat_ifbias_net > 1 && state.rate_sat_ifbias_net > 0
+                            parametrization.setRate(LS_Manipulator_new.PAR_SAT_EBFR, state.rate_sat_ifbias_net );
+                        end
+                    end
+                    
+                    
+                    
+                    
+                    if ~state.flag_iono_net
+                        parametrization.iono(2) = LS_Parametrization.ALL_REC;
+                    end
+                    if state.tparam_ztd_net == 1
+                        parametrization.tropo(1) = parametrization.EP_WISE;
+                    elseif state.tparam_ztd_net == 2
+                        parametrization.tropo(1) = parametrization.SPLINE_LIN;
+                        parametrization.tropo_opt.spline_rate = state.rate_ztd_net;
+                    elseif state.tparam_ztd_net == 3
+                        parametrization.tropo(1) = parametrization.SPLINE_CUB;
+                        parametrization.tropo_opt.spline_rate = state.rate_ztd_net;
+                    end
+                    
+                    % Use spline for estimating ZTD gradients
+                    if state.tparam_grad_net == 1
+                        parametrization.tropo_n(1) = parametrization.EP_WISE;
+                        parametrization.tropo_e(1) = parametrization.EP_WISE;
+                    elseif state.tparam_grad_net == 2
+                        parametrization.tropo_n(1) = parametrization.SPLINE_LIN;
+                        parametrization.tropo_n_opt.spline_rate = state.rate_grad_net;
+                        
+                        parametrization.tropo_e(1) = parametrization.SPLINE_LIN;
+                        parametrization.tropo_e_opt.spline_rate = state.rate_grad_net;
+                    elseif state.tparam_grad_net == 3
+                        parametrization.tropo_n(1) = parametrization.SPLINE_CUB;
+                        parametrization.tropo_n_opt.spline_rate = state.rate_grad_net;
+                        
+                        parametrization.tropo_e(1) = parametrization.SPLINE_CUB;
+                        parametrization.tropo_e_opt.spline_rate = state.rate_grad_net;
+                    end
+                    [buf_left, buf_right] = state.getBuffer();
+                    if state.isSepCooAtBoundaries && (buf_right ~= 0 || buf_left ~=0)% separete coordinate of the buffers
+                        parametrization.rec_x(1) = parametrization.STEP_CONST;
+                        parametrization.rec_y(1) = parametrization.STEP_CONST;
+                        parametrization.rec_z(1) = parametrization.STEP_CONST;
+                        [sss_ext_lim, sss_lim] = state.getSessionLimits();
+                        steps = GPS_Time();
+                        if buf_left ~= 0
+                            steps.append(sss_ext_lim.first);
+                            steps.append(sss_lim.first);
+                        else
+                            steps.append(sss_lim.first);
+                        end
+                        if buf_right ~= 0
+                            steps.append(sss_lim.last);
+                        end
+                        for r = 1 : length(this.rec_list)
+                            parametrization.rec_x_opt.steps_set{r} = steps.getCopy();
+                            parametrization.rec_y_opt.steps_set{r} = steps.getCopy();
+                            parametrization.rec_z_opt.steps_set{r} = steps.getCopy();
+                        end
+                    end
+                    
+                    if flag_try == 1
+                        % Try without buffers\
+                        [~, lim_sss] = Core.getState.getSessionLimits();
+                        ls.setUpNET(this.rec_list, coo_rate, '???', param_selection, parametrization, lim_sss);
                     else
-                        param_selection =  [param_selection;
-                            LS_Manipulator_new.PAR_SAT_CLK;
-                            LS_Manipulator_new.PAR_SAT_PPB;
-                            ];
-                    end
-                end
-                
-                if state.flag_rec_trkbias_net
-                    param_selection =  [param_selection;
-                        LS_Manipulator_new.PAR_REC_EB;];
-                    parametrization.setTimeParametrization(LS_Manipulator_new.PAR_REC_EB, state.tparam_rec_trkbias_net );
-                    if state.tparam_rec_trkbias_net > 1 && state.rate_rec_trkbias_net > 0
-                        parametrization.setRate(LS_Manipulator_new.PAR_REC_EB, state.rate_rec_trkbias_net );
+                        ls.setUpNET(this.rec_list, coo_rate, '???', param_selection, parametrization);
                     end
                     
-                end
-                
-                if state.flag_rec_ifbias_net
-                    param_selection =  [param_selection;
-                        LS_Manipulator_new.PAR_REC_EBFR;];
-                    parametrization.setTimeParametrization(LS_Manipulator_new.PAR_REC_EBFR, state.tparam_rec_ifbias_net );
-                    if state.tparam_rec_ifbias_net > 1 && state.rate_rec_ifbias_net > 0
-                        parametrization.setRate(LS_Manipulator_new.PAR_REC_EBFR, state.rate_rec_ifbias_net );
-                    end
-                end
-                
-                if state.flag_sat_trkbias_net
-                    param_selection =  [param_selection;
-                        LS_Manipulator_new.PAR_SAT_EB;];
-                    parametrization.setTimeParametrization(LS_Manipulator_new.PAR_SAT_EB, state.tparam_sat_trkbias_net );
-                    if state.tparam_sat_trkbias_net > 1 && state.rate_sat_trkbias_net > 0
-                        parametrization.setRate(LS_Manipulator_new.PAR_SAT_EB, state.rate_sat_trkbias_net );
-                    end
-                    
-                end
-                
-                if state.flag_sat_ifbias_net
-                    param_selection =  [param_selection;
-                        LS_Manipulator_new.PAR_SAT_EBFR;];
-                    parametrization.setTimeParametrization(LS_Manipulator_new.PAR_SAT_EBFR, state.tparam_sat_ifbias_net );
-                    if state.tparam_sat_ifbias_net > 1 && state.rate_sat_ifbias_net > 0
-                        parametrization.setRate(LS_Manipulator_new.PAR_SAT_EBFR, state.rate_sat_ifbias_net );
-                    end
-                end
-                
-                
-              
-                
-                if ~this.state.flag_iono_net
-                    parametrization.iono(2) = LS_Parametrization.ALL_REC;
-                end
-                 if state.tparam_ztd_net == 1
-                    parametrization.tropo(1) = parametrization.EP_WISE;
-                elseif state.tparam_ztd_net == 2
-                    parametrization.tropo(1) = parametrization.SPLINE_LIN;
-                    parametrization.tropo_opt.spline_rate = state.rate_ztd_net;
-                elseif state.tparam_ztd_net == 3
-                    parametrization.tropo(1) = parametrization.SPLINE_CUB;
-                    parametrization.tropo_opt.spline_rate = state.rate_ztd_net;
-                end
+                    % If is a baseline and MP reduction is requested,
+                    % reduce for MP
+                    if (mp_type > 0)
+                        % if baseline processing apply the map of the non reference twice
+                        if (numel(this.rec_list) == 2) && (numel(this.id_ref) == 1)
+                            % Remove eventually loaded mp map from ref data
+                            ant_mp = this.rec_list(this.id_ref).work.getAppliedMPM;
+                            ls.applyMPM(ant_mp, this.id_ref, -1);
+                            
+                            % Remove eventually loaded mp map from trg data
+                            i_trg = setdiff([1,2], this.id_ref);
+                            ant_mp = this.rec_list(i_trg).work.getAppliedMPM;
+                            ls.applyMPM(ant_mp, i_trg, -1);
+                            
+                            
+                            % Apply twice the MP of the trg
+                            ant_mp = this.rec_list(i_trg).getAntennaMultiPath;
+                            ant_mp = GNSS_Station.getCurrentMPM(ant_mp, mp_type); % Extract just the needed map
+                            ls.applyMPM(ant_mp, i_trg, +2);
+                            %ls.applyMPM(ant_mp, this.id_ref, +1);
+                        else
+                            for r = 1 : numel(this.rec_list > 2)
+                                % Remove eventually loaded mp map from ref data
+                                ant_mp = this.rec_list(r).work.getAppliedMPM;
+                                ls.applyMPM(ant_mp, this.id_ref, -1);
                                 
-                % Use spline for estimating ZTD gradients
-                if state.tparam_grad_net == 1
-                    parametrization.tropo_n(1) = parametrization.EP_WISE;
-                    parametrization.tropo_e(1) = parametrization.EP_WISE;
-                elseif state.tparam_grad_net == 2
-                    parametrization.tropo_n(1) = parametrization.SPLINE_LIN;
-                    parametrization.tropo_n_opt.spline_rate = state.rate_grad_net;
+                                % Apply the MP of the rec
+                                ant_mp = this.rec_list(r).getAntennaMultiPath;
+                                ant_mp = GNSS_Station.getCurrentMPM(ant_mp, mp_type); % Extract just the needed map
+                                ls.applyMPM(ant_mp, r, +1);
+                            end
+                        end
+                    end
                     
-                    parametrization.tropo_e(1) = parametrization.SPLINE_LIN;
-                    parametrization.tropo_e_opt.spline_rate = state.rate_grad_net;
-                elseif state.tparam_grad_net == 3
-                    parametrization.tropo_n(1) = parametrization.SPLINE_CUB;
-                    parametrization.tropo_n_opt.spline_rate = state.rate_grad_net;
+                    if state.flag_free_net_tropo
+                        ls.free_tropo = true;
+                    end
                     
-                    parametrization.tropo_e(1) = parametrization.SPLINE_CUB;
-                    parametrization.tropo_e_opt.spline_rate = state.rate_grad_net;
-                end
-                  [buf_left, buf_right] = state.getBuffer();
-                if state.isSepCooAtBoundaries && (buf_right ~= 0 || buf_left ~=0)% separete coordinate of the buffers
-                    parametrization.rec_x(1) = parametrization.STEP_CONST;
-                    parametrization.rec_y(1) = parametrization.STEP_CONST;
-                    parametrization.rec_z(1) = parametrization.STEP_CONST;
-                    [sss_ext_lim, sss_lim] = state.getSessionLimits();
-                    steps = GPS_Time();
-                    if buf_left ~= 0
-                        steps.append(sss_ext_lim.getEpoch(1));
-                        steps.append(sss_lim.getEpoch(1));
-                    else
-                        steps.append(sss_lim.getEpoch(1));
+                    if orbit_relaxation
+                        ls.absValRegularization(ls.PAR_SAT_X, 0.5);
+                        ls.absValRegularization(ls.PAR_SAT_Y, 0.5);
+                        ls.absValRegularization(ls.PAR_SAT_Z, 0.5);
+                        ls.timeRegularization(ls.PAR_SAT_X, 0.001);
+                        ls.timeRegularization(ls.PAR_SAT_Y, 0.001);
+                        ls.timeRegularization(ls.PAR_SAT_Z, 0.001);
                     end
-                    if buf_right ~= 0
-                        steps.append(sss_lim.getEpoch(2));
-                    end
-                    for r = 1 : length(this.rec_list)
-                        parametrization.rec_x_opt.steps_set{r} = steps.getCopy();
-                        parametrization.rec_y_opt.steps_set{r} = steps.getCopy();
-                        parametrization.rec_z_opt.steps_set{r} = steps.getCopy();
-                    end
-                end
-                
-                
-                ls.setUpNET(this.rec_list, coo_rate, '???', param_selection, parametrization);
-               
-                if this.state.flag_free_net_tropo
-                    ls.free_tropo = true;
-                end
-                
-                this.is_tropo_decorrel = this.state.isReferenceTropoEnabled;
-                this.is_coo_decorrel = free_net;
-                
-                
-                 if state.areg_ztd_net > 0
-                   ls.absValRegularization(ls.PAR_TROPO, (state.areg_ztd_net)^2);
-                end
-                if state.areg_grad_net > 0
-                    ls.absValRegularization(ls.PAR_TROPO_N, (state.areg_grad_net)^2);
-                    ls.absValRegularization(ls.PAR_TROPO_E, (state.areg_grad_net)^2);
-                end
-                if state.areg_rec_clock_net > 0
-                    if  state.flag_phpr_rec_clock_net
-                        ls.absValRegularization(ls.PAR_REC_CLK_PH, (state.areg_rec_clock_net)^2);
-                        ls.absValRegularization(ls.PAR_REC_CLK_PR, (state.areg_rec_clock_net)^2);
-                    else
-                        ls.absValRegularization(ls.PAR_REC_CLK, (state.areg_rec_clock_net)^2);
-                    end
-                end
-                if state.areg_rec_ifbias_net > 0
-                    ls.absValRegularization(ls.PAR_REC_EBFR, (state.areg_rec_ifbias_net)^2);
-                end
-                if state.areg_rec_trkbias_net > 0
-                    ls.absValRegularization(ls.PAR_REC_EB, (state.areg_rec_trkbias_net)^2);
-                end
-                
-                if state.dreg_ztd_net > 0
-                    ls.timeRegularization(ls.PAR_TROPO, (state.dreg_ztd_net)^2/ 3600);
-                end
-                if state.dreg_grad_net > 0
-                    ls.timeRegularization(ls.PAR_TROPO_N, (state.dreg_grad_net)^2/ 3600);
-                    ls.timeRegularization(ls.PAR_TROPO_E, (state.dreg_grad_net)^2/ 3600);
-                end
-                
-                if state.dreg_rec_ifbias_net > 0
-                    ls.timeRegularization(ls.PAR_REC_EBFR, (state.dreg_rec_ifbias_net)^2/ 3600);
-                end
-                if state.dreg_rec_trkbias_net > 0
-                    ls.timeRegularization(ls.PAR_REC_EB, (state.dreg_rec_trkbias_net)^2/ 3600);
-                end
-                
-                if state.areg_sat_clock_net > 0
-                    if  state.flag_phpr_sat_clock_net
-                        ls.absValRegularization(ls.PAR_SAT_CLK_PH, (state.areg_sat_clock_net)^2);
-                        ls.absValRegularization(ls.PAR_SAT_CLK_PR, (state.areg_sat_clock_net)^2);
-                    else
-                        ls.absValRegularization(ls.PAR_SAT_CLK, (state.areg_sat_clock_net)^2);
-                    end
-                end
-                if state.areg_sat_ifbias_net > 0
-                    ls.absValRegularization(ls.PAR_SAT_EBFR, (state.areg_sat_ifbias_net)^2);
-                end
-                if state.areg_sat_trkbias_net > 0
-                    ls.absValRegularization(ls.PAR_SAT_EB, (state.areg_sat_trkbias_net)^2);
-                end
-                
-                if state.dreg_sat_ifbias_net > 0
-                    ls.timeRegularization(ls.PAR_SAT_EBFR, (state.dreg_sat_ifbias_net)^2/ 3600);
-                end
-                if state.dreg_sat_trkbias_net > 0
-                    ls.timeRegularization(ls.PAR_SAT_EB, (state.dreg_sat_trkbias_net)^2/ 3600);
-                end
-                
-                
-                if Core.isGReD
-                    % distance regularization to be set up
                     
-                end
-                this.common_time = ls.unique_time;
-                ls.solve(Core.getState.net_amb_fix_approach >1);
-%                 idx_fix = ls.class_par == ls.PAR_AMB;
-%                 idx_fix(idx_fix) = abs(fracFNI(ls.x(idx_fix))) < 1e-9; % fixed ambiguoty
-%                 ls.removeEstParam(idx_fix);
-                ls.snoopGatt(Core.getState.getMaxPhaseErrThr, Core.getState.getMaxCodeErrThr);
-                ls.solve(Core.getState.net_amb_fix_approach >1);                
-                s0 = mean(abs(ls.res(ls.phase_obs > 0 & ~ls.outlier_obs)));
-                if s0 < 0.05
-                    % initialize array for results
-                    this.initOutNew(ls);
-                    this.addAdjValuesNew(ls);
-                    this.changeReferenceFrame(id_ref);
-                    this.addAprValues();
-                    this.pushBackInReceiver(ls);
-                else
-                    this.log.addWarning(sprintf('s0 ( %.4f) too high! not updating the results',s0));
+                    this.is_tropo_decorrel = state.isReferenceTropoEnabled;
+                    this.is_coo_decorrel = free_net;
+                    
+                    
+                    if state.areg_ztd_net > 0
+                        ls.absValRegularization(ls.PAR_TROPO, (state.areg_ztd_net)^2);
+                    end
+                    if state.areg_grad_net > 0
+                        ls.absValRegularization(ls.PAR_TROPO_N, (state.areg_grad_net)^2);
+                        ls.absValRegularization(ls.PAR_TROPO_E, (state.areg_grad_net)^2);
+                    end
+                    if state.areg_rec_clock_net > 0
+                        if  state.flag_phpr_rec_clock_net
+                            ls.absValRegularization(ls.PAR_REC_CLK_PH, (state.areg_rec_clock_net)^2);
+                            ls.absValRegularization(ls.PAR_REC_CLK_PR, (state.areg_rec_clock_net)^2);
+                        else
+                            ls.absValRegularization(ls.PAR_REC_CLK, (state.areg_rec_clock_net)^2);
+                        end
+                    end
+                    if state.areg_rec_ifbias_net > 0
+                        ls.absValRegularization(ls.PAR_REC_EBFR, (state.areg_rec_ifbias_net)^2);
+                    end
+                    if state.areg_rec_trkbias_net > 0
+                        ls.absValRegularization(ls.PAR_REC_EB, (state.areg_rec_trkbias_net)^2);
+                    end
+                    
+                    if state.dreg_ztd_net > 0
+                        ls.timeRegularization(ls.PAR_TROPO, (state.dreg_ztd_net)^2/ 3600);
+                    end
+                    if state.dreg_grad_net > 0
+                        ls.timeRegularization(ls.PAR_TROPO_N, (state.dreg_grad_net)^2/ 3600);
+                        ls.timeRegularization(ls.PAR_TROPO_E, (state.dreg_grad_net)^2/ 3600);
+                    end
+                    
+                    if state.dreg_rec_ifbias_net > 0
+                        ls.timeRegularization(ls.PAR_REC_EBFR, (state.dreg_rec_ifbias_net)^2/ 3600);
+                    end
+                    if state.dreg_rec_trkbias_net > 0
+                        ls.timeRegularization(ls.PAR_REC_EB, (state.dreg_rec_trkbias_net)^2/ 3600);
+                    end
+                    
+                    if state.areg_sat_clock_net > 0
+                        if  state.flag_phpr_sat_clock_net
+                            ls.absValRegularization(ls.PAR_SAT_CLK_PH, (state.areg_sat_clock_net)^2);
+                            ls.absValRegularization(ls.PAR_SAT_CLK_PR, (state.areg_sat_clock_net)^2);
+                        else
+                            ls.absValRegularization(ls.PAR_SAT_CLK, (state.areg_sat_clock_net)^2);
+                        end
+                    end
+                    if state.areg_sat_ifbias_net > 0
+                        ls.absValRegularization(ls.PAR_SAT_EBFR, (state.areg_sat_ifbias_net)^2);
+                    end
+                    if state.areg_sat_trkbias_net > 0
+                        ls.absValRegularization(ls.PAR_SAT_EB, (state.areg_sat_trkbias_net)^2);
+                    end
+                    
+                    if state.dreg_sat_ifbias_net > 0
+                        ls.timeRegularization(ls.PAR_SAT_EBFR, (state.dreg_sat_ifbias_net)^2/ 3600);
+                    end
+                    if state.dreg_sat_trkbias_net > 0
+                        ls.timeRegularization(ls.PAR_SAT_EB, (state.dreg_sat_trkbias_net)^2/ 3600);
+                    end
+                    
+                    
+                    if Core.isGReD
+                        % distance regularization to be set up
+                        
+                    end
+                    this.common_time = ls.unique_time;
+                    ls.solve(false);
+                    %ls.solve(false);
+                    %                 idx_fix = ls.class_par == ls.PAR_AMB;
+                    %                 idx_fix(idx_fix) = abs(fracFNI(ls.x(idx_fix))) < 1e-9; % fixed ambiguoty
+                    %                 ls.removeEstParam(idx_fix);
+                    ls.reweightHuber();
+                    %ls.solve(Core.getState.net_amb_fix_approach >1);
+                    ls.solve(false);
+                    ls.simpleSnoop();
+                    % ls.snoopGatt(Core.getState.getMaxPhaseErrThr, Core.getState.getMaxCodeErrThr);
+                    ls.solve(Core.getState.net_amb_fix_approach >1);
+                    
+                    s0 = mean(abs(ls.res(ls.phase_obs > 0 & ~ls.outlier_obs)));
+                    
+                    if (s0 < 0.015 || (flag_try == 1 && s0 < 0.05))
+                        this.log.addStatusOk(sprintf('Network adjustment completed with sigma0 = %.4f m ', s0));
+                        % initialize array for results
+                        this.initOutNew(ls);
+                        this.addAdjValuesNew(ls);
+                        this.changeReferenceFrame(id_ref);
+                        this.addAprValues();
+                        this.pushBackInReceiver(ls);
+                        flag_try = 0;
+                    else
+                        if state.isSepCooAtBoundaries && flag_try > 1
+                            this.log.addError(sprintf('s0 ( %.4f) too high! try to repeat the solution with separate coordinates',s0));
+                            flag_try = flag_try - 1;
+                        else
+                            this.log.addWarning(sprintf('s0 ( %.4f) too high! not updating the results',s0));
+                            flag_try = 0;
+                        end
+                    end
                 end
             end
             
@@ -471,7 +553,7 @@ classdef Network < handle
             n_time = this.common_time.length;
             n_rec = length(this.rec_list);
             n_set_coo = length(ls.getCommonPosIdx);
-            if this.state.isSepCooAtBoundaries
+            if Core.getState.isSepCooAtBoundaries
                 n_set_coo = 1;
             end
             this.pos_indexs_tc = ls.pos_indexs_tc;
@@ -488,7 +570,7 @@ classdef Network < handle
             n_time = ls.unique_time.length;
             n_rec = length(this.rec_list);
             n_set_coo = size(unique(ls.time_par(ls.class_par == ls.PAR_REC_X & ls.rec_par == 1,1)),1);
-            if this.state.isSepCooAtBoundaries
+            if Core.getState.isSepCooAtBoundaries
                 n_set_coo = 1;
             end
             this.clock = zeros(n_time, n_rec);
@@ -501,10 +583,11 @@ classdef Network < handle
         
         
         function addAdjValuesNew(this, ls)
+            state = Core.getState;
             n_rec = length(this.rec_list);
             % --- fill the correction values in the network
             rec_vcv = ls.rec_par([find(ls.class_par == ls.PAR_REC_X); find(ls.class_par == ls.PAR_REC_Y); find(ls.class_par == ls.PAR_REC_Z)]);
-            rec_vcv(rec_vcv == this.id_ref) = [];
+            rec_vcv(ismember(rec_vcv, this.id_ref)) = [];
 
             for i = 1 : n_rec
                 % if all value in the receiver are set to nan initilaize them to zero
@@ -515,11 +598,11 @@ classdef Network < handle
                 end
                 % for all paramter take the apriori in the receiver and sum the netwrok estimated correction
                 idx_rec = ls.rec_par == i;
-                [~, int_lim] = this.state.getSessionLimits();
+                [~, int_lim] = state.getSessionLimits();
                 
-                if i > 0 & sum(ls.class_par == ls.PAR_REC_X ) >0% coordiantes are always zero on first receiver
+                if i > 0 & sum(ls.class_par == ls.PAR_REC_X ) >0 % coordiantes are always zero on first receiver
                     coo_vcv = [];
-                    if this.state.isSepCooAtBoundaries
+                    if Core.getState.isSepCooAtBoundaries
                         % Push coordinates from LS object to rec
                         idx_x = ls.class_par == ls.PAR_REC_X & idx_rec;
                         if sum(idx_x) > 0
@@ -552,7 +635,7 @@ classdef Network < handle
                         
                         coo = [cox coy coz];
                     else
-                        if i ~= this.id_ref && false
+                        if ~ismember(i, this.id_ref) && false
                             coo_vcv = ls.coo_vcv(rec_vcv == i,rec_vcv == i);
                             if ~isempty(coo_vcv)
                                 coo_vcv = [coo_vcv(1,1) (coo_vcv(1,2) + coo_vcv(2,1))/2  (coo_vcv(1,3) + coo_vcv(3,1))/2 coo_vcv(2,2) (coo_vcv(2,3) + coo_vcv(3,2))/2 coo_vcv(3,3)];
@@ -578,10 +661,10 @@ classdef Network < handle
                 idx_clk = ls.class_par == LS_Manipulator_new.PAR_REC_CLK & idx_rec;
                 clk = ls.x(idx_clk);
                 time_clk = ls.time_par(idx_clk);
-                [~,idx_time_clk] = ismember(time_clk, this.common_time.getNominalTime.getRefTime(ls.time_min.getMatlabTime));
+                [~,idx_time_clk] = ismember(round(time_clk), round(this.common_time.getNominalTime.getRefTime(ls.time_min.getMatlabTime)));
                 this.clock(idx_time_clk,i) = nan2zero(this.clock(idx_time_clk,i)) + clk;
-                state = this.state;
-                if this.state.flag_ztd_net
+                state = Core.getState;
+                if state.flag_ztd_net
                     if state.tparam_ztd_net > 1
                         if state.tparam_ztd_net == 2
                             spline_order = 1;
@@ -591,9 +674,9 @@ classdef Network < handle
                         idx_trp = ls.class_par == LS_Manipulator_new.PAR_TROPO & idx_rec;
                         if sum(idx_trp) > 0
                             tropo = ls.x(idx_trp);
-                            tropo_dt = rem(this.common_time.getNominalTime(ls.obs_rate) - ls.getTimePar(idx_trp).minimum, this.state.rate_ztd_net)/ this.state.rate_ztd_net;
-                            tropo_idx = floor((this.common_time.getNominalTime(ls.obs_rate) - ls.getTimePar(idx_trp).minimum)/this.state.rate_ztd_net);
-                            [~,tropo_idx] = ismember(tropo_idx*this.state.rate_ztd_net, ls.getTimePar(idx_trp).getNominalTime(ls.obs_rate).getRefTime(ls.getTimePar(idx_trp).minimum.getMatlabTime));
+                            tropo_dt = rem(this.common_time.getNominalTime(ls.obs_rate) - ls.getTimePar(idx_trp).minimum, state.rate_ztd_net)/ state.rate_ztd_net;
+                            tropo_idx = floor((this.common_time.getNominalTime(ls.obs_rate) - ls.getTimePar(idx_trp).minimum)/state.rate_ztd_net);
+                            [~,tropo_idx] = ismember(tropo_idx*state.rate_ztd_net, ls.getTimePar(idx_trp).getNominalTime(ls.obs_rate).getRefTime(ls.getTimePar(idx_trp).minimum.getMatlabTime));
                             valid_ep = tropo_idx ~=0 & tropo_idx <= (length(tropo)-3);
                             spline_base = Core_Utils.spline(tropo_dt(valid_ep),spline_order);
                             
@@ -610,7 +693,7 @@ classdef Network < handle
                     end
                 end
                 
-                if this.state.flag_grad_net
+                if state.flag_grad_net
                     if state.tparam_grad_net > 1
                            if state.tparam_grad_net == 2
                             spline_order = 1;
@@ -623,9 +706,9 @@ classdef Network < handle
                         idx_trp_e = ls.class_par == LS_Manipulator_new.PAR_TROPO_N & idx_rec;
                         
                         tropo_e = ls.x(idx_trp_e);
-                        tropo_dt = rem(this.common_time.getNominalTime(ls.obs_rate) - ls.getTimePar(idx_trp_n).minimum, this.state.rate_grad_net)/ this.state.rate_grad_net;
-                        tropo_idx = floor((this.common_time.getNominalTime(ls.obs_rate) - ls.getTimePar(idx_trp_n).minimum)/this.state.rate_grad_net);
-                        [~,tropo_idx] = ismember(tropo_idx*this.state.rate_grad_net, ls.getTimePar(idx_trp_n).getNominalTime(ls.obs_rate).getRefTime(ls.getTimePar(idx_trp_n).minimum.getMatlabTime));
+                        tropo_dt = rem(this.common_time.getNominalTime(ls.obs_rate) - ls.getTimePar(idx_trp_n).minimum, state.rate_grad_net)/ state.rate_grad_net;
+                        tropo_idx = floor((this.common_time.getNominalTime(ls.obs_rate) - ls.getTimePar(idx_trp_n).minimum)/state.rate_grad_net);
+                        [~,tropo_idx] = ismember(tropo_idx*state.rate_grad_net, ls.getTimePar(idx_trp_n).getNominalTime(ls.obs_rate).getRefTime(ls.getTimePar(idx_trp_n).minimum.getMatlabTime));
                             valid_ep = tropo_idx ~=0 & tropo_idx <= (length(tropo_n)-3);
                         spline_base = Core_Utils.spline(tropo_dt(valid_ep),spline_order);
                         
@@ -674,6 +757,7 @@ classdef Network < handle
                     this.coo(:,3,i) = S * this.coo(:,3,i);
                 end
                 
+                state = Core.getState;
                 % apply the S transform to the epochwise parameters
                 for i = 1 : n_time
                     id_present = ~isnan(this.clock(i,:));
@@ -690,11 +774,11 @@ classdef Network < handle
                     this.clock(i,:) = (S*this.clock(i,:)')';
                     % ztd
                     if ~this.is_tropo_decorrel
-                        if this.state.flag_ztd_net
+                        if state.flag_ztd_net
                             this.ztd(i,:) = (S*this.ztd(i,:)')';
                         end
                         % gradients
-                        if this.state.flag_grad_net
+                        if state.flag_grad_net
                             this.ztd_gn(i,:) = (S*this.ztd_gn(i,:)')';
                             this.ztd_ge(i,:) = (S*this.ztd_ge(i,:)')';
                         end
@@ -705,6 +789,7 @@ classdef Network < handle
         
         function addAprValues(this)
             n_rec = length(this.rec_list);
+            state = Core.getState;
             % --- add the apriori values
             for i = 1 : n_rec
                 % if all value in the receiver are set to nan initilaize them to zero
@@ -723,14 +808,14 @@ classdef Network < handle
                 clk_rec = this.rec_list(i).work.getDt();
                 this.clock(idx_pos,i) = this.clock(idx_pos,i) + clk_rec(idx_is);
                 
-                if this.state.flag_ztd_net
+                if state.flag_ztd_net
                     ztd_rec = this.rec_list(i).work.getZtd();
                     ztd_rec_apr = this.rec_list(i).work.getZwd() + this.rec_list(i).work.getAprZhd();
                     ztd_rec(ztd_rec == 0) = ztd_rec_apr(ztd_rec == 0);
                     this.ztd(idx_pos,i) = this.ztd(idx_pos,i) + ztd_rec(idx_is);
                 end
                 
-                if this.state.flag_grad_net
+                if state.flag_grad_net
                     [gn_rec, ge_rec] = this.rec_list(i).work.getGradient();
                     
                     this.ztd_gn(idx_pos,i) = this.ztd_gn(idx_pos,i) + gn_rec(idx_is);
@@ -741,7 +826,7 @@ classdef Network < handle
             end
         end
                         
-        function pushBackInReceiver(this,ls)
+        function pushBackInReceiver(this, ls)
             % Save in work the results computed by the network object
             %
             % INPUT
@@ -758,22 +843,25 @@ classdef Network < handle
             end
             n_rec = length(this.rec_list);
             cc = Core.getConstellationCollector();
+            state = Core.getState;
             % --- push back the results in the receivers
             for i = 1 : n_rec
-                this.rec_list(i).work.xyz = this.coo(i,:);
-                this.rec_list(i).work.xyz_vcv = this.coo_vcv(i,:);
+                if sum(ls.param_class == ls.PAR_REC_X | ls.param_class == ls.PAR_REC_Y  | ls.param_class == ls.PAR_REC_Z )>0
+                    this.rec_list(i).work.xyz = this.coo(i,:);
+                    this.rec_list(i).work.xyz_vcv = this.coo_vcv(i,:);
+                end
                 idx_res_av = ~isnan(this.clock(:, i));
                 [idx_is, idx_pos] = ismembertol(this.common_time.getEpoch(idx_res_av).getGpsTime(), this.rec_list(i).work.time.getGpsTime, 0.002, 'DataScale', 1);
                 idx_pos = idx_pos(idx_pos > 0);
                 clk = this.clock(idx_res_av, i);
                 this.rec_list(i).work.dt(idx_pos) = this.rec_list(i).work.dt(idx_pos) + clk(idx_is) ./ Core_Utils.V_LIGHT;
-                if this.state.flag_ztd_net
+                if state.flag_ztd_net
                     ztd = this.ztd(idx_res_av, i);
                     this.rec_list(i).work.ztd(idx_pos) = ztd(idx_is);
                     %zhd = this.rec_list(i).work.getAprZhd();
                     this.rec_list(i).work.zwd(idx_pos) = ztd(idx_is) - this.rec_list(i).work.apr_zhd(idx_pos);
                 end
-                if this.state.flag_grad_net
+                if state.flag_grad_net
                     gn = this.ztd_gn(idx_res_av, i);
                     this.rec_list(i).work.tgn(idx_pos) = gn(idx_is);
                     ge = this.ztd_ge(idx_res_av, i);
@@ -787,35 +875,35 @@ classdef Network < handle
                 this.rec_list(i).work.quality_info.n_obs = sum(idx_obs);
                 this.rec_list(i).work.quality_info.n_sat = length(unique(ls.satellite_obs(idx_obs)));
                 this.rec_list(i).work.quality_info.n_sat_max = max(hist(unique(ls.time_obs.getEpoch(idx_obs).getNominalTime(ls.obs_rate).getRefTime(ls.time_obs.minimum.getMatlabTime) * 1000 + double(ls.satellite_obs(idx_obs))), this.rec_list(i).work.quality_info.n_epochs ));
-                this.rec_list(i).work.quality_info.fixing_ratio = (sum(l_fixed(:,1)) / size(l_fixed, 1)) * 100; %TBD
+                this.rec_list(i).work.quality_info.fixing_ratio = ls.fix_ratio; %TBD
                 
                 % residual
-                idx_rec = find( ls.receiver_obs == i);
-                %                 % save phase residuals
-                idx_ph = find(this.rec_list(i).work.obs_code(:,1) == 'L');
-                this.rec_list(i).work.sat.res_ph_by_ph = nan(this.rec_list(i).work.time.length, length(idx_ph));
-                for j = 1 : length(idx_ph)
-                    ip = idx_ph(j);
-                    id_code = Core_Utils.findAinB({[this.rec_list(i).work.system(ip) this.rec_list(i).work.obs_code(ip,:)]}, ls.unique_obs_codes);
-                    idx_res = idx_rec(ls.obs_codes_id_obs(idx_rec) == id_code & ls.satellite_obs(idx_rec) == this.rec_list(i).work.go_id(ip));
-                    if any(idx_res)
-                        
-                        [~,idx_time] = ismember(ls.ref_time_obs(idx_res),this.rec_list(i).work.time.getNominalTime.getRefTime(ls.time_min.getMatlabTime));     
-                        this.rec_list(i).work.sat.res_ph_by_ph(idx_time,j) = ls.res(idx_res);
-                    end
-                end
-                % save phase residuals
-                idx_pr = find(this.rec_list(i).work.obs_code(:,1) == 'C');
-                this.rec_list(i).work.sat.res_pr_by_pr = nan(this.rec_list(i).work.time.length, length(idx_ph));
-                for j = 1 : length(idx_pr)
-                    ip = idx_pr(j);
-                    id_code = Core_Utils.findAinB({[this.rec_list(i).work.system(ip) this.rec_list(i).work.obs_code(ip,:)]}, ls.unique_obs_codes);
-                    idx_res = idx_rec(ls.obs_codes_id_obs(idx_rec) == id_code & ls.satellite_obs(idx_rec) == this.rec_list(i).work.go_id(ip));
-                    if any(idx_res)
-                        [~,idx_time] = ismember(ls.ref_time_obs(idx_res),this.rec_list(i).work.time.getNominalTime.getRefTime(ls.time_min.getMatlabTime));
-                        this.rec_list(i).work.sat.res_pr_by_pr(idx_time,j) = ls.res(idx_res);
-                    end
-                end
+                % idx_rec = find( ls.receiver_obs == i);
+                % %                 % save phase residuals
+                % idx_ph = find(this.rec_list(i).work.obs_code(:,1) == 'L');
+                % this.rec_list(i).work.sat.res_ph_by_ph = nan(this.rec_list(i).work.time.length, length(idx_ph));
+                % for j = 1 : length(idx_ph)
+                %     ip = idx_ph(j);
+                %     id_code = Core_Utils.findAinB({[this.rec_list(i).work.system(ip) this.rec_list(i).work.obs_code(ip,:)]}, ls.unique_obs_codes);
+                %     idx_res = idx_rec(ls.obs_codes_id_obs(idx_rec) == id_code & ls.satellite_obs(idx_rec) == this.rec_list(i).work.go_id(ip));
+                %     if any(idx_res)
+                % 
+                %         [~,idx_time] = ismember(ls.ref_time_obs(idx_res),this.rec_list(i).work.time.getNominalTime.getRefTime(ls.time_min.getMatlabTime));     
+                %         this.rec_list(i).work.sat.res_ph_by_ph(idx_time,j) = ls.res(idx_res);
+                %     end
+                % end
+                % % save phase residuals
+                % idx_pr = find(this.rec_list(i).work.obs_code(:,1) == 'C');
+                % this.rec_list(i).work.sat.res_pr_by_pr = nan(this.rec_list(i).work.time.length, length(idx_ph));
+                % for j = 1 : length(idx_pr)
+                %     ip = idx_pr(j);
+                %     id_code = Core_Utils.findAinB({[this.rec_list(i).work.system(ip) this.rec_list(i).work.obs_code(ip,:)]}, ls.unique_obs_codes);
+                %     idx_res = idx_rec(ls.obs_codes_id_obs(idx_rec) == id_code & ls.satellite_obs(idx_rec) == this.rec_list(i).work.go_id(ip));
+                %     if any(idx_res)
+                %         [~,idx_time] = ismember(ls.ref_time_obs(idx_res),this.rec_list(i).work.time.getNominalTime.getRefTime(ls.time_min.getMatlabTime));
+                %         this.rec_list(i).work.sat.res_pr_by_pr(idx_time,j) = ls.res(idx_res);
+                %     end
+                % end
                 % push back electronic bias
                 if sum(ls.class_par == LS_Manipulator_new.PAR_REC_EB) > 0
                     idx_eb = find(ls.class_par == LS_Manipulator_new.PAR_REC_EB & ls.rec_par == i);
@@ -856,45 +944,10 @@ classdef Network < handle
                 obs_code_pr = reshape(cell2mat(ls.unique_obs_codes(obs_id))',4,length(obs_id))';
                 prn_pr = cc.prn(sat);
 
-                this.rec_list(i).work.sat.res.import(3, res_time, [res_ph res_pr], [prn_ph; prn_pr], [obs_code_ph; obs_code_pr], Coordinates.fromXYZ(this.coo(i,:), this.common_time.getCentralTime));
+                this.rec_list(i).work.sat.res.import(3, res_time, [res_ph res_pr], [prn_ph; prn_pr], [obs_code_ph; obs_code_pr], Coordinates.fromXYZ(this.rec_list(i).work.getMedianPosXYZ, this.common_time.getCentralTime));
 
             end
-            if sum(ls.param_class == LS_Manipulator_new.PAR_SAT_EB) > 0 && false
-                cs = Core.getCoreSky();
-                n_sat = max(ls.sat_par);
-                for s = 1 : n_sat
-                    idx_eb = find(ls.class_par == LS_Manipulator_new.PAR_SAT_EB & ls.sat_par == s);
-                    for ii = idx_eb'
-                        if sum(ls.class_par == LS_Manipulator_new.PAR_SAT_EBFR) > 0
-                            wl_id = ls.wl_id_par(ii);
-                            eb_fr_id = find(ls.class_par == LS_Manipulator_new.PAR_SAT_EBFR & ls.wl_id_par == wl_id & ls.sat_par == s);
-                            o_code = ls.unique_obs_codes{ls.obs_codes_id_par(ii)};
-                            data = ls.x(eb_fr_id) + ls.x(ii);
-                            time_data = ls.getTimePar(eb_fr_id);
-                            time_data_min = time_data.minimum;
-                            ref_time = time_data.getRefTime(time_data_min.getMatlabTime);
-                            % time_apr has to be sampled regualarly
-                            time_data_final = 0 : time_data.getRate : (time_data.maximum - time_data_min);
-                            [~,iii] = ismembertol(ref_time,time_data_final, 1e-7);
-                            iii = Core_Utils.ordinal2logical(iii,length(time_data_final));
-                            data_final = zeros(size(time_data_final));
-                            data_final(iii) = data;
-                            not_fill = find(~iii);
-                            iii = find(iii);
-                            for nn = not_fill'
-                                [~,i_dist ]= min(abs(nn - iii));
-                                data_final(nn) = data_final(iii(i_dist));
-                            end
-                            prm  = ls.ls_parametrization.getParametrization(LS_Manipulator_new.PAR_SAT_EBFR);
-                            cs.tracking_bias{s}{ii} = Electronic_Bias(o_code, data_final, time_data_final, prm);
-                        else
-                            o_code = ls.unique_obs_codes{ls.obs_codes_id_par(ii)};
-                            data = ls.x(ii);
-                            cs.tracking_bias{s}{ii} = Electronic_Bias(o_code, data);
-                        end
-                    end
-                end
-            end
+            
             %this.pushBackEphemeris(ls);
             %this.pushBackIono(ls);
         end
@@ -922,19 +975,21 @@ classdef Network < handle
             cs = Core.getCoreSky();
             %%% subs clk
             clk = zeros(this.common_time.length,size(cs.clock,2));
+            rate = this.common_time.getRate();
             comm_time_ref = this.common_time.getNominalTime(ls.obs_rate).getRefTime(this.common_time.minimum.getMatlabTime);
             for s = 1 : length(ls.unique_sat_goid)
                 idx_clk = ls.class_par == ls.PAR_SAT_CLK & ls.sat_par == ls.unique_sat_goid(s);
                 time_sat = ls.getTimePar(idx_clk).getNominalTime(ls.obs_rate);
-                [~,idx] = ismember(time_sat.getRefTime(this.common_time.first.getMatlabTime), this.common_time.getRefTime(this.common_time.first.getMatlabTime));
+                [~,idx] = ismember(round(time_sat.getRefTime(this.common_time.first.getMatlabTime)/rate)*rate, round(this.common_time.getRefTime(this.common_time.first.getMatlabTime)/rate)*rate);
                 clk(idx,ls.unique_sat_goid(s)) = ls.x(idx_clk);
             end
             
-            GReD_Utility.substituteClK(clk, time_sat);
+            GReD_Utility.substituteClK(clk, this.common_time.getNominalTime(ls.obs_rate));
             %%% sub epehem
             idx_sat_x = ls.class_par == LS_Manipulator_new.PAR_SAT_X;
             idx_sat_y = ls.class_par == LS_Manipulator_new.PAR_SAT_Y;
             idx_sat_z = ls.class_par == LS_Manipulator_new.PAR_SAT_Z;
+            if sum(idx_sat_x) > 0 |  sum(idx_sat_y) > 0 | sum(idx_sat_z) > 0
             coord = zeros(this.common_time.length,length(ls.unique_sat_goid),3);
             spline_rate = ls.ls_parametrization.sat_x_opt.spline_rate;
             spline_order = 3;
@@ -944,28 +999,28 @@ classdef Network < handle
                 idx_sat_z_s = idx_sat_z & ls.sat_par == ls.unique_sat_goid(s);
                 if sum(idx_sat_x_s) > 0
                     xs = ls.x(idx_sat_x_s);
-                    tropo_dt = rem(this.common_time.getNominalTime(ls.obs_rate) - ls.getTimePar(idx_sat_x_s).minimum, spline_rate)/ spline_rate;
-                    tropo_idx = floor((this.common_time.getNominalTime(ls.obs_rate) - ls.getTimePar(idx_sat_x_s).minimum)/spline_rate);
-                    [~,tropo_idx] = ismember(tropo_idx*spline_rate, ls.getTimePar(idx_sat_x_s).getNominalTime(ls.obs_rate).getRefTime(ls.getTimePar(idx_sat_x_s).minimum.getMatlabTime));
-                    valid_ep = tropo_idx ~=0 & tropo_idx <= (length(xs)-3);
-                    spline_base = Core_Utils.spline(tropo_dt(valid_ep),3);
-                    xcoord =sum(spline_base .* xs(repmat(tropo_idx(valid_ep), 1, spline_order + 1) + repmat((0 : spline_order), numel(tropo_idx(valid_ep)), 1)), 2);
+                    x_dt = rem(this.common_time.getNominalTime(ls.obs_rate) - ls.getTimePar(idx_sat_x_s).minimum, spline_rate)/ spline_rate;
+                    x_idx = floor((this.common_time.getNominalTime(ls.obs_rate) - ls.getTimePar(idx_sat_x_s).minimum)/spline_rate);
+                    [~,x_idx] = ismember(x_idx*spline_rate, ls.getTimePar(idx_sat_x_s).getNominalTime(ls.obs_rate).getRefTime(ls.getTimePar(idx_sat_x_s).minimum.getMatlabTime));
+                    valid_ep = x_idx ~=0 & x_idx <= (length(xs)-3);
+                    spline_base = Core_Utils.spline(x_dt(valid_ep),3);
+                    xcoord =sum(spline_base .* xs(repmat(x_idx(valid_ep), 1, spline_order + 1) + repmat((0 : spline_order), numel(x_idx(valid_ep)), 1)), 2);
                     
-                    xs = ls.x(idx_sat_y_s);
-                    tropo_dt = rem(this.common_time.getNominalTime(ls.obs_rate) - ls.getTimePar(idx_sat_x_s).minimum, spline_rate)/ spline_rate;
-                    tropo_idx = floor((this.common_time.getNominalTime(ls.obs_rate) - ls.getTimePar(idx_sat_x_s).minimum)/spline_rate);
-                    [~,tropo_idx] = ismember(tropo_idx*spline_rate, ls.getTimePar(idx_sat_x_s).getNominalTime(ls.obs_rate).getRefTime(ls.getTimePar(idx_sat_x_s).minimum.getMatlabTime));
-                    valid_ep = tropo_idx ~=0 & tropo_idx <= (length(xs)-3);
-                    spline_base = Core_Utils.spline(tropo_dt(valid_ep),3);
-                    ycoord =sum(spline_base .* xs(repmat(tropo_idx(valid_ep), 1, spline_order + 1) + repmat((0 : spline_order), numel(tropo_idx(valid_ep)), 1)), 2);
+                    ys = ls.x(idx_sat_y_s);
+                    y_dt = rem(this.common_time.getNominalTime(ls.obs_rate) - ls.getTimePar(idx_sat_x_s).minimum, spline_rate)/ spline_rate;
+                    y_idx = floor((this.common_time.getNominalTime(ls.obs_rate) - ls.getTimePar(idx_sat_x_s).minimum)/spline_rate);
+                    [~,y_idx] = ismember(y_idx*spline_rate, ls.getTimePar(idx_sat_x_s).getNominalTime(ls.obs_rate).getRefTime(ls.getTimePar(idx_sat_x_s).minimum.getMatlabTime));
+                    valid_ep = y_idx ~=0 & y_idx <= (length(ys)-3);
+                    spline_base = Core_Utils.spline(y_dt(valid_ep),3);
+                    ycoord =sum(spline_base .* ys(repmat(y_idx(valid_ep), 1, spline_order + 1) + repmat((0 : spline_order), numel(y_idx(valid_ep)), 1)), 2);
                     
-                    xs = ls.x(idx_sat_z_s);
-                    tropo_dt = rem(this.common_time.getNominalTime(ls.obs_rate) - ls.getTimePar(idx_sat_x_s).minimum, spline_rate)/ spline_rate;
-                    tropo_idx = floor((this.common_time.getNominalTime(ls.obs_rate) - ls.getTimePar(idx_sat_x_s).minimum)/spline_rate);
-                    [~,tropo_idx] = ismember(tropo_idx*spline_rate, ls.getTimePar(idx_sat_x_s).getNominalTime(ls.obs_rate).getRefTime(ls.getTimePar(idx_sat_x_s).minimum.getMatlabTime));
-                    valid_ep = tropo_idx ~=0 & tropo_idx <= (length(xs)-3);
-                    spline_base = Core_Utils.spline(tropo_dt(valid_ep),3);
-                    zcoord =sum(spline_base .* xs(repmat(tropo_idx(valid_ep), 1, spline_order + 1) + repmat((0 : spline_order), numel(tropo_idx(valid_ep)), 1)), 2);
+                    zs = ls.x(idx_sat_z_s);
+                    z_dt = rem(this.common_time.getNominalTime(ls.obs_rate) - ls.getTimePar(idx_sat_x_s).minimum, spline_rate)/ spline_rate;
+                    z_idx = floor((this.common_time.getNominalTime(ls.obs_rate) - ls.getTimePar(idx_sat_x_s).minimum)/spline_rate);
+                    [~,z_idx] = ismember(z_idx*spline_rate, ls.getTimePar(idx_sat_x_s).getNominalTime(ls.obs_rate).getRefTime(ls.getTimePar(idx_sat_x_s).minimum.getMatlabTime));
+                    valid_ep = z_idx ~=0 & z_idx <= (length(zs)-3);
+                    spline_base = Core_Utils.spline(z_dt(valid_ep),3);
+                    zcoord =sum(spline_base .* zs(repmat(z_idx(valid_ep), 1, spline_order + 1) + repmat((0 : spline_order), numel(z_idx(valid_ep)), 1)), 2);
                     
                     coord(valid_ep,s,1) = coord(valid_ep,s,1) + xcoord;
                     coord(valid_ep,s,2) = coord(valid_ep,s,2) + ycoord;
@@ -973,7 +1028,57 @@ classdef Network < handle
 
                 end
             end
-            cs.coordFit(this.common_time, coord, ls.unique_sat_goid);           
+            cs.coordFit(this.common_time, coord, ls.unique_sat_goid);  
+            end
+            recs = Core.getRecList();
+            % piush back bias
+            if sum(ls.param_class == LS_Manipulator_new.PAR_SAT_EB) > 0
+                cs = Core.getCoreSky();
+                n_sat = max(ls.sat_par);
+                for s = 1 : n_sat
+                    idx_eb = find(ls.class_par == LS_Manipulator_new.PAR_SAT_EB & ls.sat_par == s);
+                    for ip = 1 : length(idx_eb)
+                        ii = idx_eb(ip);
+                        if sum(ls.class_par == LS_Manipulator_new.PAR_SAT_EBFR) > 0
+                            wl_id = ls.wl_id_par(ii);
+                            eb_fr_id = find(ls.class_par == LS_Manipulator_new.PAR_SAT_EBFR & ls.wl_id_par == wl_id & ls.sat_par == s);
+                            o_code = ls.unique_obs_codes{ls.obs_codes_id_par(ii)};
+                            data = ls.x(eb_fr_id) + ls.x(ii);
+                            time_data = ls.getTimePar(eb_fr_id);
+                            time_data_min = time_data.minimum;
+                            ref_time = time_data.getRefTime(time_data_min.getMatlabTime);
+                            % time_apr has to be sampled regualarly
+                            time_data_final = 0 : time_data.getRate : (time_data.maximum - time_data_min);
+                            [~,iii] = ismembertol(ref_time,time_data_final, 1e-7);
+                            iii = Core_Utils.ordinal2logical(iii,length(time_data_final));
+                            data_final = zeros(size(time_data_final));
+                            gps_time_data_final = time_data_min.getCopy();
+                            gps_time_data_final.addSeconds(time_data_final);
+                            data_final(iii) = data;
+                            not_fill = find(~iii);
+                            iii = find(iii);
+                            for nn = not_fill'
+                                [~,i_dist ]= min(abs(nn - iii));
+                                data_final(nn) = data_final(iii(i_dist));
+                            end
+                            prm  = ls.ls_parametrization.getParametrization(LS_Manipulator_new.PAR_SAT_EBFR);
+                            cs.tracking_bias{s}{ip} = Electronic_Bias(o_code, data_final, gps_time_data_final, prm(1));
+                        else
+                            o_code = ls.unique_obs_codes{ls.obs_codes_id_par(ii)};
+                            data = ls.x(ii);
+                            cs.tracking_bias{s}{ip} = Electronic_Bias(o_code,data);
+                        end
+                    end
+                end
+                for i = 1 : length(recs)
+                    if ~recs(i).work.isEmpty
+                        %this.rec_list(i).work.remGroupDelay(); % apply the new clock
+                        recs(i).work.applyGroupDelayNew();
+                    end
+                end
+            end
+            works = [recs.work];
+            Receiver_Work_Space.detectOutlierMarkCycleSlipMultiReceiver(works);
         end
         
         function pushBackSubCooInReceiver(this, time, rate)
@@ -998,18 +1103,19 @@ classdef Network < handle
             %
             % SYNTAX:
             % this.exportCrd(this)
+            state = Core.getState;
             if nargin < 2 || isempty(file_prefix)
-                %[~,file_prefix] =fileparts( rec.state.getHomeDir);
-                file_prefix = [this.state.getOutPrefix '_'];
+                %[~,file_prefix] =fileparts( Core.getState.getHomeDir);
+                file_prefix = [state.getOutPrefix '_'];
             end
             if ndims(this.coo) < 3
                 st_time  = this.common_time.first;
                 en_time = this.common_time.last;
                 coo = this.coo;
             else
-                st_time = this.state.getSessionLimits.first;
+                st_time = state.getSessionLimits.first;
                 st_time.addSeconds(this.coo_rate * (size(this.coo,3) - 1));
-                en_time = this.state.getSessionLimits.first;
+                en_time = state.getSessionLimits.first;
                 en_time.addSeconds(this.coo_rate * size(this.coo,3));
                 coo = this.coo(:,:,end);
             end
@@ -1019,7 +1125,7 @@ classdef Network < handle
                 sod_f = '86400';
             end
             [~,doy] = st_time.getDOY();
-            fpath  = sprintf('%s/%s%02d%03d.%05d-%05d.CRD',this.state.getOutDir, file_prefix, st_time.getYY, doy, sod_s,sod_f);
+            fpath  = sprintf('%s/%s%02d%03d.%05d-%05d.CRD', state.getOutDir, file_prefix, st_time.getYY, doy, sod_s,sod_f);
             fid = fopen(fpath,'Wb');
             now_time = GPS_Time.now();
             fprintf(fid, ['                                                                 ' upper(now_time.toString('dd-mmm-yy HH:MM')) ' \n']);

@@ -16,7 +16,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
@@ -148,7 +148,7 @@ classdef Fixer < handle
                     [tmp_amb_fixed, sq_norm, success_rate,~,~,nfx,mu] = LAMBDA(amb_float(amb_ok), full(C_amb_amb(amb_ok, amb_ok)), 5, 'P0', 0.995, 'mu', this.mu);
                     is_fixed = true;
                     l_fixed   = amb_ok;
-                    %l_fixed(l_fixed) = abs(fracFNI(tmp_amb_fixed(:,1))) < 1e-9;
+                    l_fixed(l_fixed) = abs(fracFNI(tmp_amb_fixed(:,1))) < 1e-9;
                     amb_fixed(amb_ok, 1) = tmp_amb_fixed(:,1);
 
                 case {'bayesian_with_monte_carlo'}
@@ -165,7 +165,7 @@ classdef Fixer < handle
                     % boostrap solution starting from the most probable and
                     % not the one with lower formal errror
                     l_fixed = amb_ok;
-                    [amb_fixed(amb_ok), l_fixed(amb_ok),  VCV_not_fixed] = this.mp_bootstrap(amb_float(amb_ok),(C_amb_amb(amb_ok, amb_ok)));
+                    [amb_fixed(amb_ok), l_fixed(amb_ok),  VCV_not_fixed] = this.mp_bootstrap(amb_float(amb_ok),full(C_amb_amb(amb_ok, amb_ok)));
                     is_fixed = true;
             end
         end

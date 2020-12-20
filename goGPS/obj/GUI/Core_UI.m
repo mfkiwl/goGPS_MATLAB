@@ -2,7 +2,7 @@
 % =========================================================================
 %
 % DESCRIPTION
-%   class to manages the user interface of goGPS
+%   class to manage the user interface of goGPS
 %
 % EXAMPLE
 %   ui = Core_UI.getInstance();
@@ -15,7 +15,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
@@ -44,7 +44,7 @@
 classdef Core_UI < Logos
     
     properties (Constant)
-        FONT_SIZE_CONVERSION_LNX = 0.9;
+        FONT_SIZE_CONVERSION_LNX = 0.85;
         FONT_SIZE_CONVERSION_MAC = 1.45;
         FONT_SIZE_CONVERSION_WIN = 1;
         LIGHT_GREY_BG_NOT_SO_LIGHT2 =  0.73 * ones(3, 1);
@@ -129,6 +129,8 @@ classdef Core_UI < Logos
     properties % Utility Pointers to Singletons
         state
         w_bar
+        
+        hide_fig = false; % Keep figure hidden (for background processing)
     end
     %% PROPERTIES GUI
     % ==================================================================================================================================================
@@ -143,6 +145,7 @@ classdef Core_UI < Logos
             % Core object creator
         end
     end
+    
     %% METHODS UI
     % ==================================================================================================================================================
     methods (Static, Access = public)
@@ -561,17 +564,17 @@ classdef Core_UI < Logos
             text_label = findall(gcf,'Tag', 'm_grid_xticklabel');
             for txt = text_label(:)'
                 txt.FontName = FONT;
-                txt.FontSize = iif(txt.FontSize == 12, 13, 15);
+                txt.FontSize = Core_UI.getFontSize(16);
             end
             text_label = findall(gcf,'Tag', 'm_grid_yticklabel');
             for txt = text_label(:)'
                 txt.FontName = FONT;
-                txt.FontSize = iif(txt.FontSize == 12, 13, 15);
+                txt.FontSize = Core_UI.getFontSize(16);
             end
             text_label = findall(gcf,'Tag', 'm_ruler_label');
             for txt = text_label(:)'
                 txt.FontName = FONT;
-                txt.FontSize = iif(txt.FontSize == 12, 13, 15);
+                txt.FontSize = Core_UI.getFontSize(14);
             end
             legend = findall(gcf, 'type', 'legend');
             for lg = legend(:)'
@@ -763,6 +766,7 @@ classdef Core_UI < Logos
             fig_handle.Units = unit;
         end
     end
+    
     %% METHODS INIT
     % ==================================================================================================================================================
     methods
@@ -778,6 +782,7 @@ classdef Core_UI < Logos
             this.main = GUI_Edit_Settings.getInstance(flag_wait);
         end
     end
+    
     %% METHODS INSERT
     % ==================================================================================================================================================
     methods (Static)
@@ -1040,6 +1045,25 @@ classdef Core_UI < Logos
         
         function date_hour = insertDateSpinnerHour(container, time, call_back)
             date_hour = uix.HBox('Parent', container, ...
+                'BackgroundColor', Core_UI.LIGHT_GREY_BG);
+            Core_UI.insertDateSpinner(date_hour, time.toString('yyyy/mm/dd'), call_back);
+            box_handle = uix.Grid('Parent', date_hour, ...
+                'Padding', 0, ...
+                'BackgroundColor', Core_UI.LIGHT_GREY_BG);
+            uicontrol('Parent', box_handle, ...
+                'Style', 'Text', ...
+                'String', 'hh:mm:ss', ...
+                'ForegroundColor', Core_UI.BLACK, ...
+                'HorizontalAlignment', 'center', ...
+                'FontSize', Core_UI.getFontSize(9), ...
+                'BackgroundColor', Core_UI.LIGHT_GREY_BG);
+            editable_handle = uicontrol('Parent', box_handle,...
+                'Style', 'edit',...
+                'FontSize', Core_UI.getFontSize(9), ...
+                'Callback', call_back);
+        end
+        function date_hour = insertVDateSpinnerHour(container, time, call_back)
+            date_hour = uix.VBox('Parent', container, ...
                 'BackgroundColor', Core_UI.LIGHT_GREY_BG);
             Core_UI.insertDateSpinner(date_hour, time.toString('yyyy/mm/dd'), call_back);
             box_handle = uix.Grid('Parent', date_hour, ...
@@ -1512,7 +1536,8 @@ classdef Core_UI < Logos
             end
             j_edit_box = handle(jScrollPanel.getView,'CallbackProperties');
         end
-    end     
+    end
+    
     %% METHODS ELEMENT MODIFIER
     % ==================================================================================================================================================
     methods (Static)
@@ -1766,6 +1791,7 @@ classdef Core_UI < Logos
             j_edit_box.setText('');% end of content
         end
     end
+    
     %% METHODS EVENTS
     % ==================================================================================================================================================
     methods (Static, Access = public)
@@ -1880,6 +1906,7 @@ classdef Core_UI < Logos
             end
         end        
     end
+    
     %% METHODS getters
     % ==================================================================================================================================================
     methods
@@ -1890,6 +1917,14 @@ classdef Core_UI < Logos
     %% METHODS (static) getters
     % ==================================================================================================================================================
     methods (Static)
+        function hide_fig = isHideFig(status)
+            ui = Core_UI.getInstance();
+            if nargin == 1
+                ui.hide_fig = logical(status(1));
+            end
+            hide_fig = ui.hide_fig;
+        end
+                
         function os_size = getSizeConversion()
             if isunix()
                 if ismac()
@@ -1923,7 +1958,7 @@ classdef Core_UI < Logos
             end
         end
         
-        function logo_ax = insertLogo(container, location)  
+        function logo_ax = insertLogo(container, location)
             % Insert a new axis containing goGPS Logo
             %
             % SYNTAX 

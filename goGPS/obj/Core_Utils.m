@@ -16,7 +16,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2020 Andrea Gatti, Giulio Tagliaferro, Eugenio Realini
@@ -483,19 +483,30 @@ classdef Core_Utils < handle
         function id_ok = polarCleaner(az, el, data, step_deg)
             % Remove observations above 3 sigma 
             %
+            % INPUT 
+            %   az          azimuth [rad]
+            %   el          elevation [rad]
+            %  data
+            %  step_deg     horizontal array with max two lines [2x2]
+            %               step_deg(1,:) size of cells - flag everything below 3 sigma 
+            %               step_deg(2,:) size of cells - unflag everything below 3 sigma 
+            %
             % SYNTAX
             %   id_ok = Core_Utils.polarCleaner(az, el, data, step_deg)
             
             % az -180 : 180
-            % el 0 : 90
-            az_grid = ((-180 + (step_deg(1) / 2)) : step_deg(1) : (180 - step_deg(1) / 2)) .* (pi/180);
-            el_grid = flipud(((step_deg(end) / 2) : step_deg(end) : 90 - (step_deg(end) / 2))' .* (pi/180));
+            %% el 0 : 90
+            %figure; polarScatter(az, pi/2-el, 5, data); colormap(gat);
+            step_deg = [360, 1; 3, 3];
+            
+            az_grid = ((-180 + (step_deg(1, 1) / 2)) : step_deg(1, 1) : (180 - step_deg(1, 1) / 2)) .* (pi/180);
+            el_grid = flipud(((step_deg(1, end) / 2) : step_deg(1, end) : 90 - (step_deg(1, end) / 2))' .* (pi/180));
             n_az = numel(az_grid);
             n_el = numel(el_grid);
             
             % Find map indexes
-            col = max(1, min(floor((az + pi) / (step_deg(1) / 180 * pi) ) + 1, length(az_grid)));
-            row = max(1, min(floor((pi/2 - el) / (step_deg(end) / 180 * pi)) + 1, length(el_grid)));
+            col = max(1, min(floor((az + pi) / (step_deg(1, 1) / 180 * pi) ) + 1, length(az_grid)));
+            row = max(1, min(floor((pi/2 - el) / (step_deg(1, end) / 180 * pi)) + 1, length(el_grid)));
             
             uid = row + (col-1) * numel(el_grid);
             id_ok = true(size(data));
@@ -505,6 +516,33 @@ classdef Core_Utils < handle
                 sigma = std(dset);
                 id_ok(id_set(abs(dset) > 3 * sigma)) = false;
             end
+            %figure; polarScatter(az(id_ok == 0), pi/2-el(id_ok == 0), 5, data(id_ok == 0)); colormap(gat);
+            
+            if size(step_deg, 1) == 2
+                step_deg = step_deg(2,:);
+                
+                az_grid = ((-180 + (step_deg(1, 1) / 2)) : step_deg(1, 1) : (180 - step_deg(1, 1) / 2)) .* (pi/180);
+                el_grid = flipud(((step_deg(1, end) / 2) : step_deg(1, end) : 90 - (step_deg(1, end) / 2))' .* (pi/180));
+                n_az = numel(az_grid);
+                n_el = numel(el_grid);
+                
+                % Find map indexes
+                col = max(1, min(floor((az + pi) / (step_deg(1) / 180 * pi) ) + 1, length(az_grid)));
+                row = max(1, min(floor((pi/2 - el) / (step_deg(end) / 180 * pi)) + 1, length(el_grid)));
+                
+                uid = row + (col-1) * numel(el_grid);
+                for b = unique(uid)'
+                    id_set = find(uid == b);
+                    dset = data(id_set) - median(serialize(data(id_set)));
+                    %data(id_set) = median(serialize(data(id_set)));
+                    sigma = min(0.01, std(dset));
+                    id_ok(id_set(abs(dset) < 3 * sigma)) = true;
+                end
+                
+                %figure; polarScatter(az(id_ok), pi/2-el(id_ok), 5, data(id_ok)); colormap(gat);
+                %figure; polarScatter(az(id_ok == 0), pi/2-el(id_ok == 0), 5, data(id_ok == 0)); colormap(gat);
+            end
+            
         end
         
                
@@ -2009,7 +2047,7 @@ classdef Core_Utils < handle
             str2 = Core_Utils.num2Code2Char(unique(Core_Utils.code2Char2Num(str2)));
         end
         
-        function f_status_lst = aria2cDownloadUncompress(file_name_lst, f_ext_lst, f_status_lst, date_list, out_dir)
+        function [f_status_lst, aria_err_code] = aria2cDownloadUncompress(file_name_lst, f_ext_lst, f_status_lst, date_list, out_dir)
             % Try to download files using aria2C
             %
             % INPUT
@@ -2023,10 +2061,11 @@ classdef Core_Utils < handle
             %   f_status_lst = Core_Utils.aria2cDownloadUncompress(file_name_lst, f_ext_lst, f_status_lst, <date_list>, <out_dir>)
             %
             
+            aria_err_code = 0;
             log = Core.getLogger();
             fnp = File_Name_Processor();
             rm = Remote_Resource_Manager.getInstance;
-            
+            state = Core.getCurrentSettings();
             if ispc()
                 aria2c_path = '.\utility\thirdParty\aria2-extra\aria2_win\aria2c.exe';
             elseif ismac()
@@ -2044,6 +2083,8 @@ classdef Core_Utils < handle
                 return
             end
 
+            credentials = '';
+
             % Get file list path for all the files present in the list
             idf = find(~f_status_lst);
             fnl = file_name_lst(idf);
@@ -2055,12 +2096,18 @@ classdef Core_Utils < handle
                 server = regexp(file_name,'(?<=\?{)\w*(?=})','match', 'once'); % saerch for ?{server_name} in paths
                 if ~isempty(server)
                     file_name = strrep(file_name,['?{' server '}'],'');
-                    [s_ip, port] = rm.getServerIp(server);
+                    [s_ip, port, user,passwd] = rm.getServerIp(server);
                     switch port
                         case '21'
                             fnl{i} = ['ftp://' s_ip ':' port file_name fel{i}];
+                            if ~isempty(user) & ~isempty(passwd)
+                                credentials = sprintf('--ftp-user=%s  --ftp-passw=%s',user,passwd);
+                            end
                         otherwise
                             fnl{i} = ['http://' s_ip ':' port file_name fel{i}];
+                            if ~isempty(user) & ~isempty(passwd)
+                                credentials = sprintf('--http-user=%s  --http-passw=%s',user,passwd);
+                            end
                     end
                 else
                     fnl{i} = [file_name fel{i}];
@@ -2069,7 +2116,7 @@ classdef Core_Utils < handle
                     out_dir = Core.getState.getFileDir(file_name);
                 end
                 if nargin >= 4 && ~isempty(date_list)
-                    out_dir = fnp.dateKeyRep(out_dir, date_list.getEpoch(date_list.length - idf(i) + 1));
+                    out_dir = fnp.dateKeyRep(out_dir, date_list.getEpoch(date_list.length - idf(i) + 1),'',state.vmf_res,upper(state.vmf_source));
                 end
                 odl{i} = out_dir;
                 [~, name, ext] = fileparts(fnl{i});
@@ -2116,14 +2163,15 @@ classdef Core_Utils < handle
                                     log.addMessage(log.indent(sprintf('%s', str)));
                                     try
                                         if ispc()
-                                            dos(sprintf('"%s" -j 20 -c -i %s -d %s >nul 2>&1', aria2c_path, file_name, old_od)); % suppress output
-                                            % dos(sprintf('"%s" -j 20 -c -i %s -d %s', aria2c_path, file_name, old_od)); % do not suppress output
+                                            dos(sprintf('"%s" %s -j 20 -c -i %s -d %s >nul 2>&1', aria2c_path, credentials, file_name, old_od)); % suppress output
+                                            %dos(sprintf('"%s" %s -j 20 -c -i %s -d %s', aria2c_path, credentials, file_name, old_od)); % do not suppress output
                                         else
-                                            dos(sprintf('%s -j 20 -c -i %s -d %s &> /dev/null', aria2c_path, file_name, old_od));  % suppress output
-                                            %dos(sprintf('%s -j 20 -c -i %s -d %s', aria2c_path, file_name, old_od));  % do not suppress output
+                                            dos(sprintf('%s %s -j 20 -c -i %s -d %s &> /dev/null', aria2c_path, credentials, file_name, old_od));  % suppress output
+                                            %dos(sprintf('%s %s -j 20 -c -i %s -d %s ', aria2c_path, credentials, file_name, old_od));  % do not suppress output
                                         end
                                     catch
-                                        this.log.addError('aria2c is not working, is it installed?');
+                                        aria_err_code = 1;
+                                        log.addError('aria2c is not working, is it installed?');
                                     end
                                 end
                                 % Check for zero byte files (download errors)
@@ -2185,13 +2233,19 @@ classdef Core_Utils < handle
             
         end
         
-        function [status] = downloadHttpTxtResUncompress(filename, out_dir)
+        function [status] = downloadHttpTxtResUncompress(filename, out_dir,user,passwd)
+             if nargin < 3
+                user = '';
+                passwd = '';
+            end
             log = Core.getLogger();
             fnp = File_Name_Processor();
             try
                 options = weboptions;
                 options.ContentType = 'text';
                 options.Timeout = 15;
+                options.Username = user;
+                options.Password = passwd;
                 [remote_location, filename, ext] = fileparts(filename);
                 filename = [filename ext];
                 log.addMessage(log.indent(sprintf('downloading %s ...',filename)));
@@ -2201,22 +2255,25 @@ classdef Core_Utils < handle
                     mkdir(out_dir);
                 end
                 try
-                    txt = websave(fullfile(out_dir, filename), ['http://' remote_location '/' filename]);
+                    txt = websave(fullfile(out_dir, filename), ['http://' remote_location '/' filename],options);
                 catch ex
                     if instr(ex.message, '404')
                         try
                             compressed_name = [filename, '.gz'];
-                            txt = websave(fullfile(out_dir, compressed_name), ['http://' remote_location '/' compressed_name]);
+                            txt = websave(fullfile(out_dir, compressed_name), ['http://' remote_location '/' compressed_name],options);
                         catch ex
                             if instr(ex.message, '404')
                                 try
                                     compressed_name = [filename, '.Z'];
-                                    txt = websave(fullfile(out_dir, compressed_name), ['http://' remote_location '/' compressed_name]);
+                                    txt = websave(fullfile(out_dir, compressed_name), ['http://' remote_location '/' compressed_name],options);
                                 catch
                                     status = false;
                                 end
                             end
                         end
+                    elseif instr(ex.message, '401')
+                        status = false;
+                        log.addError('Unauthorized, please add credentials to credentials.txt');
                     end
                 end
                 if status
@@ -2233,7 +2290,7 @@ classdef Core_Utils < handle
                                 end
                                 delete(compressed_name);
                             catch
-                                this.log.addError(sprintf('Please decompress the %s file before trying to use it in goGPS!!!', compressed_name));
+                                log.addError(sprintf('Please decompress the %s file before trying to use it in goGPS!!!', compressed_name));
                                 status = false;
                             end
                         end
@@ -3155,7 +3212,7 @@ classdef Core_Utils < handle
         end
         
         
-        function x = solveLDL(L,D,b)
+        function x = solveLDLo(L,D,b)
             % solve system where normal matrix has beeen ldl decomposed
             % NOTE : A = L*D*L' (sparse matrices)
             %
@@ -3164,6 +3221,39 @@ classdef Core_Utils < handle
             y = L\b;
             y = y./diag(D);
             x = L'\y;
+        end
+        
+        function x = solveLDL(L,D,b,P,keep_id)
+            x = zeros(size(b));
+            
+            L_red = L(keep_id,keep_id);
+            d = diag(D);
+            d_red = d(keep_id);
+            
+            id_est_amb = (P*keep_id)>0;
+            
+            P_red = P(id_est_amb,keep_id);
+            
+            x(id_est_amb) = P_red * (L_red' \((1./d_red).*(L_red\(P_red' *b(id_est_amb)))));
+        end
+        
+        function sys_list = getPrefSys(sys_list)
+            % get prefered system (HARDCODED)
+            if sum(sys_list == 'G')>0
+                sys_list = 'G';
+            elseif sum(sys_list == 'R')>0
+                sys_list = 'R';
+            elseif sum(sys_list == 'E') >0
+                sys_list = 'E';
+            elseif sum(sys_list == 'C') >0
+                sys_list = 'C';
+            elseif sum(sys_list == 'J') >0
+                sys_list = 'J';
+            elseif sum(sys_list == 'I') >0
+                sys_list = 'I';
+            else
+                sys_list = [];
+            end
         end
         
         function [dtm, lat, lon, georef, info] = getDTM(nwse, res)

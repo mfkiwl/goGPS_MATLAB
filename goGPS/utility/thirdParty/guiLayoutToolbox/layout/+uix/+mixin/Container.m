@@ -291,7 +291,10 @@ classdef Container < handle
             if isempty( TRACKED )
                 v = ver( 'layout' );
                 try %#ok<TRYNC>
-                    uix.tracking( 'UA-82270656-2', v(1).Version, class( obj ) )
+                    % Disable tracking it's too hidden in the code 
+                    % it does not allow users to know it is happening 
+                    % (even if it is anonymous)
+                    % uix.tracking( 'UA-82270656-2', v(1).Version, class( obj ) )
                 end
                 TRACKED = true;
             end

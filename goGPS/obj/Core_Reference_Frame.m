@@ -36,9 +36,13 @@ classdef Core_Reference_Frame < handle
     
     properties (Constant)
         FLAG_STRING = {'0) rough position', '1) a-priori','2) Fixed', '3) Fixed for PREPRO'};
+        FLAG_ROUGH = 0;
+        FLAG_APRIORI = 1
+        FLAG_FIXED = 2
+        FLAG_FIXED4PREPRO = 3
     end
     
-    properties        
+    properties
         station_code
         xyz     % XYZ coordinates
         vxvyvz  % XYZ velocities
@@ -178,7 +182,7 @@ classdef Core_Reference_Frame < handle
             % SYNTAX:
             %  [xyz, is_valid] = this.getCoo(sta_name, epoch)
             xyz = [];
-            
+            std_pup = [];
             % load RF if not loaded
             is_valid = false;
             if ~this.isValid()
@@ -196,6 +200,10 @@ classdef Core_Reference_Frame < handle
                         end_validity_time = this.end_validity_epoch.getSubSet(idx_sta).getGpsTime();
                         epoch_gps = epoch.getGpsTime();
                         idx_sta2 = st_validity_time < epoch_gps & end_validity_time > epoch_gps;
+                        if not(any(idx_sta2))
+                            log = Core.getLogger;
+                            log.addMessage(log.indent('No valid a-priori coordinate found.'));
+                        end
                         idx_sta = idx_sta(idx_sta2);
                         if not(isempty(idx_sta))
                             idx_sta = idx_sta(1);
@@ -315,6 +323,21 @@ classdef Core_Reference_Frame < handle
                 sta_idx = find(strcmpi(this.station_code, sta_code), 1, 'first');
                 if sum(sta_idx) > 0
                     status  = this.flag(sta_idx(1)) == 2;
+                end
+            end
+        end
+        
+        function [status] = isFixedPrepro(this, sta_code)
+            % tell if station coordiantes are meant to be fixed
+            % in case sation not sound return false
+            %
+            % SYNTAX:
+            %  [status] = this.isFixed(sta_code)
+            status = false;
+            if size(this.station_code) > 0
+                sta_idx = find(strcmpi(this.station_code, sta_code), 1, 'first');
+                if sum(sta_idx) > 0
+                    status  = this.flag(sta_idx(1)) == 3;
                 end
             end
         end
@@ -445,7 +468,7 @@ classdef Core_Reference_Frame < handle
             str = sprintf('%s#               [m]           [m]            [m]       [m/y]    [m/y]     [m/y]         [m]       [m]  yyyy-mm-dd HH:MM:SS.s yyyy-mm-dd HH:MM:SS.s\n', str);
             str = sprintf('%s#--------------------------------------------------------------------------------------------------------------------------------------------------\n', str);
             for i = 1 : size(this.xyz, 1)
-                str = sprintf('%s%4s %+13.5f %+13.5f %+13.5f %1d %+9.5f %+9.5f %+9.5f  %+9.5f %+9.5f  %s %s\n', str, this.station_code{i}, this.xyz(i, 1), this.xyz(i, 2), this.xyz(i, 3), this.flag(i), this.vxvyvz(i, 1), this.vxvyvz(i, 2), this.vxvyvz(i, 3),  this.std_pup(i, 1),  this.std_pup(i, 2),  this.start_validity_epoch.getEpoch(i).toString('yyyy-mm-dd HH:MM:SS.s'), this.end_validity_epoch.getEpoch(i).toString('yyyy-mm-dd HH:MM:SS.s'));
+                str = sprintf('%s%4s %+14.5f %+14.5f %+14.5f %1d %+9.5f %+9.5f %+9.5f  %+9.5f %+9.5f  %s %s\n', str, this.station_code{i}, this.xyz(i, 1), this.xyz(i, 2), this.xyz(i, 3), this.flag(i), this.vxvyvz(i, 1), this.vxvyvz(i, 2), this.vxvyvz(i, 3),  this.std_pup(i, 1),  this.std_pup(i, 2),  this.start_validity_epoch.getEpoch(i).toString('yyyy-mm-dd HH:MM:SS.s'), this.end_validity_epoch.getEpoch(i).toString('yyyy-mm-dd HH:MM:SS.s'));
             end
         end
         
@@ -468,6 +491,170 @@ classdef Core_Reference_Frame < handle
                 Core.getLogger.addError(sprintf('"%s" cannot be saved', file_path));
             end
         end
+        
+        function fh_list = showMapGoogle(this)
+            % Show Google Map of the stations
+            %
+            % CITATION:
+            %   Pawlowicz, R., 2019. "M_Map: A mapping package for MATLAB", version 1.4k, [Computer software],
+            %   available online at www.eoas.ubc.ca/~rich/map.html.
+            %
+            % INPUT
+            %   new_fig     open a new figure
+            %
+            % SYNTAX
+            %   sta_list.showMapGoogle(new_fig);
+           
+            N_MAX_STA = 50;
+            
+            flag_labels = true;
+            flag_large_points = true;
+            point_size = 15;
+            point_color = [0, 255, 10]/256;
+            
+            f = figure('Visible', 'off');
+            
+            fh_list = f;
+            fig_name = sprintf('RFMapGoogle');
+            f.UserData = struct('fig_name', fig_name);
+
+            Core.getLogger.addMarkedMessage('Preparing map, please wait...');
+            
+            f.Color = [1 1 1];
+            [lat, lon] = Coordinates.fromXYZ(this.xyz).getGeodetic;
+            lat = lat / pi * 180;
+            lon = lon / pi * 180;
+            
+            lat_tmp = lat;
+            lon_tmp = lon;
+            
+            % set map limits
+            if numel(lon_tmp) == 1
+                lon_lim = minMax(lon_tmp) + [-0.05 0.05];
+                lat_lim = minMax(lat_tmp) + [-0.05 0.05];
+            else
+                lon_lim = minMax(lon_tmp); lon_lim = lon_lim + [-1 1] * diff(lon_lim) / 6;
+                lat_lim = minMax(lat_tmp); lat_lim = lat_lim + [-1 1] * diff(lat_lim) / 6;
+            end
+            lon_lim = lon_lim + [-1 1] * max(0, (0.5 - diff(minMax(lon_lim))) / 2);
+            lat_lim = lat_lim + [-1 1] * max(0, (0.5 - diff(minMax(lat_lim))) / 2);
+            nwse = [lat_lim(2), lon_lim(1), lat_lim(1), lon_lim(2)];
+            clon = nwse([2 4]) + [-0.001 0.001];
+            clat = max(-90, min(90, nwse([3 1]) + [-0.001 0.001]));
+
+            axes
+            xlim(clon);
+            ylim(clat);
+            [lon_ggl,lat_ggl, img_ggl] = plot_google_map('alpha', 0.95, 'maptype','satellite','refresh',0,'autoaxis',0);
+            xlim(lon_lim);
+            ylim(lat_lim);
+            
+            m_proj('equidistant','lon',clon,'lat',clat);   % Projection
+            %m_proj('utm', 'lon',lon_lim,'lat',lat_lim);   % Projection
+            drawnow
+            m_image(lon_ggl, lat_ggl, img_ggl);
+            
+            % read shapefile
+            shape = 'none';
+            if (~strcmp(shape,'none'))
+                if (~strcmp(shape,'coast')) && (~strcmp(shape,'fill'))
+                    if (strcmp(shape,'10m'))
+                        M = m_shaperead('countries_10m');
+                    elseif (strcmp(shape,'30m'))
+                        M = m_shaperead('countries_30m');
+                    else
+                        M = m_shaperead('countries_50m');
+                    end
+                    [x_min, y_min] = m_ll2xy(min(lon_lim), min(lat_lim));
+                    [x_max, y_max] = m_ll2xy(max(lon_lim), max(lat_lim));
+                    for k = 1 : length(M.ncst)
+                        lam_c = M.ncst{k}(:,1);
+                        ids = lam_c <  min(lon);
+                        lam_c(ids) = lam_c(ids) + 360;
+                        phi_c = M.ncst{k}(:,2);
+                        [x, y] = m_ll2xy(lam_c, phi_c);
+                        if sum(~isnan(x))>1
+                            x(find(abs(diff(x)) >= abs(x_max - x_min) * 0.90) + 1) = nan; % Remove lines that occupy more than th 90% of the plot
+                            line(x,y,'color', [0.3 0.3 0.3]);
+                        end
+                    end
+                else
+                    if (strcmp(shape,'coast'))
+                        m_coast('line','color', lineCol);
+                    else
+                        m_coast('patch',lineCol);
+                    end
+                end
+            end
+            hold on;
+            
+            m_grid('box','fancy','tickdir','in', 'fontsize', 16);
+            % m_ruler(1.1, [.05 .40], 'tickdir','out','ticklen',[.007 .007], 'fontsize',14);
+            drawnow
+            %m_ruler([.7 1], -0.05, 'tickdir','out','ticklen',[.007 .007], 'fontsize',14);
+            [x, y] = m_ll2xy(lon, lat);
+            
+            
+            %point_color = Cmap.get('viridis', numel(x));
+            %point_size = 25;
+            if size(point_color, 1) > 1
+                scatter(x(:), y(:), point_size, 1:numel(x), 'filled'); hold on;
+                colormap(point_color);
+            else
+                if numel(this.station_code) > N_MAX_STA
+                    plot(x(:), y(:),'.', 'MarkerSize', point_size, 'Color', Core_UI.BLACK); hold on;
+                    plot(x(:), y(:),'.', 'MarkerSize', point_size-3, 'Color', point_color); hold on;
+                else
+                    plot(x(:), y(:),'.', 'MarkerSize', 8, 'Color', Core_UI.BLACK); hold on;
+                end
+            end
+            if flag_labels
+                % Label BG (in background w.r.t. the point)
+                if numel(this.station_code) < N_MAX_STA
+                    for r = 1 : numel(this.station_code)
+                        name = upper(this.station_code{r});
+                        txt = text(x(r), y(r), ['   ' name], ...
+                            'FontWeight', 'bold', 'FontSize', 12, 'Color', [1 1 1], ...
+                            'BackgroundColor', [1 1 1], 'EdgeColor', [0.3 0.3 0.3], ...
+                            'Margin', 2, 'LineWidth', 2, ...
+                            'HorizontalAlignment','left');
+                    end
+                end
+            end
+            
+            if flag_large_points && numel(this) < N_MAX_STA
+                for r = 1 : numel(this.station_code)
+                    plot(x(r), y(r), '.', 'MarkerSize', 45, 'Color', Core_UI.getColor(r, numel(this)), 'UserData', 'GNSS_point');
+                end
+                plot(x(:), y(:), '.k', 'MarkerSize', 5);
+                plot(x(:), y(:), 'ko', 'MarkerSize', 15, 'LineWidth', 2);
+            end
+            if flag_labels
+                if numel(this.station_code) < N_MAX_STA
+                    for r = 1 : numel(this.station_code)
+                        name = upper(this.station_code{r});
+                        t = text(x(r), y(r), ['   ' name], ...
+                            'FontWeight', 'bold', 'FontSize', 12, 'Color', [0 0 0], ...
+                            ...%'FontWeight', 'bold', 'FontSize', 10, 'Color', [0 0 0], ...
+                            ...%'BackgroundColor', [1 1 1], 'EdgeColor', [0.3 0.3 0.3], ...
+                            'Margin', 2, 'LineWidth', 2, ...
+                            'HorizontalAlignment','left');
+                        %t.Units = 'pixels';
+                        %t.Position(1) = t.Position(1) + 20 + 10 * double(numel(sta_list) == 1);
+                        %t.Units = 'data';
+                    end
+                end
+            end
+            
+            Core_UI.addExportMenu(f); Core_UI.addBeautifyMenu(f); Core_UI.beautifyFig(f);
+            f.Visible = 'on'; drawnow;
+            title(sprintf('Map of GNSS stations\\fontsize{5} \n'), 'FontSize', 16);
+            %xlabel('Longitude [deg]');
+            %ylabel('Latitude [deg]');
+            ax = gca; ax.FontSize = 16;
+            Core.getLogger.addStatusOk('The map is ready ^_^');
+        end
+
         
     end
     

@@ -11,6 +11,10 @@ function h = polarImagesc(az_grid, decl_grid, data, plot_bg)
 % OUTPUT
 %   h       handle to the scattered points
 %
+% SYNTAX
+%    h = polarImagesc(az_grid, decl_grid, data, plot_bg)
+%    h = polarImagesc(data)
+%
 % SEE ALSO
 %   polarScatter
 
@@ -19,7 +23,7 @@ function h = polarImagesc(az_grid, decl_grid, data, plot_bg)
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2020 Andrea Gatti, Giulio Tagliaferro, Eugenio Realini
@@ -42,8 +46,14 @@ function h = polarImagesc(az_grid, decl_grid, data, plot_bg)
 %    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 %----------------------------------------------------------------------------------------------
 
-
-%%% INTERNAL PARAMETER
+    if nargin == 1
+        data = az_grid;
+        
+        az_grid = linspace(0, 2*pi, size(data,2));
+        decl_grid = linspace(0, pi/2, size(data,1));
+    end
+    
+    %%% INTERNAL PARAMETER
     scale = 1;
     %%%
 
@@ -52,7 +62,7 @@ function h = polarImagesc(az_grid, decl_grid, data, plot_bg)
     y = repmat(cos(az_grid(:)'), numel(decl_n), 1) .* repmat(decl_n(:), 1, numel(az_grid));
     %scatter(x(data~=0),y(data~=0),20,data(data~=0),'filled')
     
-    dataInterp = scatteredInterpolant(x(:), y(:), data(:), 'linear' );
+    dataInterp = scatteredInterpolant(x(:), y(:), double(data(:)), 'linear' );
     x = -1 : 0.0025 : 1;
     y = x;
     [x_mg, y_mg] = meshgrid(x, y);

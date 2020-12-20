@@ -22,7 +22,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
@@ -61,8 +61,10 @@ classdef Coordinates < Exportable & handle
     end
     
     properties (SetAccess = public, GetAccess = public) % set permission have been changed from private to public (Giulio)
+        name = '';                  % Name of the point (not yet used extensively)
         time = GPS_Time             % Position time
-        xyz = []                    % Coordinates are stored in meters in as cartesian XYZ ECEF
+        xyz = []                    % Coordinates are stored in meters in as cartesian XYZ ECEF [m]
+        v_xyz = []                  % Coordinates velocities XYZ ECEF  [m / year]
         precision = 0.0001          % 3D limit [m] to check the equivalence among coordinates
         Cxx = [] 
     end
@@ -87,6 +89,11 @@ classdef Coordinates < Exportable & handle
             this.xyz = pos.xyz;
             this.Cxx = pos.Cxx;
             this.time = pos.time.getCopy;
+            try % legacy support
+                this.v_xyz = pos.v_xyz;
+            catch
+                this.v_xyz = [];
+            end
         end
         
         function copy = getCopy(this)
@@ -271,7 +278,7 @@ classdef Coordinates < Exportable & handle
             if nargout == 5
                 time = this.time.getCopy;
             end
-        end        
+        end
         
         function [lat, lon, h_ellips, h_ortho] = getGeodetic(this)
             % Get Coordinates as Geodetic coordinates
@@ -292,6 +299,9 @@ classdef Coordinates < Exportable & handle
                 end
             else
                 [lat, lon] = Coordinates.cart2geod(this.xyz);
+                if nargout <= 1
+                    lat = [lat, lon];
+                end
             end
         end
         
@@ -322,7 +332,7 @@ classdef Coordinates < Exportable & handle
             ondu = this.getOrthometricCorrFromLatLon(lat, lon);
         end
         
-        function loc = getLocal(this, ref_pos)
+        function [loc_enu, v_enu, id_ok] = getLocal(this, ref_pos)
             % Get Coordinates as Local coordinates with respect to ref_pos
             %
             % OUTPUT
@@ -332,9 +342,29 @@ classdef Coordinates < Exportable & handle
             %   loc = this.getLocal(ref_pos)
            
             xyz_ref = ref_pos.getXYZ;
-            xyz_this = this.getXYZ;
+            [xyz_this, time] = this.getXYZ;
             baseline = xyz_this - repmat(xyz_ref, size(xyz_this,1),1);
-            loc = Coordinates.cart2loca(xyz_ref, baseline);
+            [loc_enu, rot_mat] = Coordinates.cart2loca(xyz_ref, baseline);
+            if nargout > 1
+                if size(xyz_this, 1) > 3
+                    if isempty(this.v_xyz)
+                        v_enu = [0 0 0];
+                        
+                        for c = 1:3
+                            [~, id_ok(:,c), trend] = strongFilterStaticData(loc_enu(:,c), 0.8, 7);
+                            v_enu(c) = (trend(end) - trend(1)) / (time.last.getMatlabTime - time.first.getMatlabTime) * 365; % m / year
+                        end
+                        this.v_xyz = v_enu * rot_mat;
+                    else
+                        v_xyz = this.v_xyz; %#ok<PROPLC>
+                        v_enu = v_xyz * rot_mat'; %#ok<PROPLC>
+                    end
+                else
+                    id_ok = true(size(xyz_ref,1));
+                    v_enu = [nan nan nan];
+                end
+                
+            end
         end
         
         function status = isEmpty(this)
@@ -343,7 +373,15 @@ classdef Coordinates < Exportable & handle
             % SYNTAX
             %   status this.isEmpty();
             status = isempty(this.xyz);
-        end  
+        end
+        
+        function n_el = length(this)
+            % Return the number of coordinates present in the object
+            %
+            % SYNTAX
+            %   n_el = this.length();
+            n_el = size(this.xyz, 1);
+        end
         
         function dist = ellDistanceTo(this, coo)
             % return the distance on the ellipsoid between the object
@@ -452,7 +490,7 @@ classdef Coordinates < Exportable & handle
     % =========================================================================
     %    STATIC CONSTRUCTOR
     % =========================================================================
-    methods (Access = 'public', Static)        
+    methods (Access = 'public', Static)
         function this = fromXYZ(xyz, y, z, time)
             % Set the Coordinates from XYZ coordinates
             %
@@ -521,7 +559,76 @@ classdef Coordinates < Exportable & handle
             z = (N * (1 - GPS_SS.ELL_E.^2) + h_ellips) .* sin(lat);
 
             this = Coordinates.fromXYZ(x, y, z, time);
-        end                    
+        end
+    
+        function this = fromCooFile(file_name)
+            % Importing from a coo file XYZ and timestamp to a Coordinate
+            % object
+            this = Coordinates;
+            if exist(file_name, 'file') == 2
+                % Read and append
+                [txt, lim] = Core_Utils.readTextFile(file_name, 3);
+                if isempty(lim)
+                    f = false;
+                    timestamp = [];
+                else
+                    % Verify the file version (it should match 1.0):
+                    id_ver = find(txt(lim(:,1) + 1) == 'F'); % +FileVersion
+                    file_ok = not(isempty(regexp(txt(lim(id_ver, 1):lim(id_ver, 2)), '(?<=FileVersion[ ]*: )1.0', 'once')));
+                    
+                    % Point Name
+                    timestamp = [];
+                    if file_ok
+                        id_line = find(txt(lim(:,1) + 1) == 'M'); % +MonitoringPoint
+                        if isempty(id_line)
+                            file_ok = false;
+                        else
+                            this.name = regexp(txt(lim(id_line, 1):lim(id_line, 2)), '(?<=MonitoringPoint[ ]*: ).*', 'match', 'once');
+                        end
+                    end
+                    
+                    % Data column (at the moment set here manually)
+                    data_col = [2, 3, 4] + 1; % x, y, z
+                    
+                    % Data should be present
+                    timestamp = [];
+                    if file_ok
+                        id_len_ok = find(lim(:,3)+1 >= 9);
+                        data_start = id_len_ok(find(txt(lim(id_len_ok,1) + 9) == 't') + 1); % +DataStart
+                        id_len_ok = find(lim(:,3)+1 >= 8);
+                        data_stop = id_len_ok(find(txt(lim(id_len_ok,1) + 7) == 'd') -1); % +DataStop
+                        if isempty(data_stop)
+                            data_stop = size(lim, 1);
+                        end
+                        if isempty(data_start)
+                            file_ok = false;
+                        else
+                            id_data = lim(data_start:data_stop,1);
+                            % Read old timestamps
+                            timestamp = datenum(txt(repmat(id_data, 1, 19) + repmat(0:18, numel(id_data), 1)), 'yyyy-mm-dd HH:MM:SS');
+                        end
+                    end
+                    
+                    % Import XYZ and time
+                    if file_ok
+                        this.xyz = nan(data_stop - data_start + 1, 3);
+                        for l = 0 : (data_stop - data_start)
+                            data_line = strsplit(txt(lim(data_start + l, 1) : lim(data_start + l, 2)), ';');
+                            this.xyz(l + 1, 1) = str2double(data_line{data_col(1)});
+                            this.xyz(l + 1, 2) = str2double(data_line{data_col(2)});
+                            this.xyz(l + 1, 3) = str2double(data_line{data_col(3)});
+                        end
+                        this.time = GPS_Time(timestamp);
+                    end
+                    
+                    % Check description field
+                    % use the old one for the file
+                end
+            else
+                log = Core.getLogger();
+                log.addError(sprintf('%s cannot be imported', file_name));
+            end
+        end
     end
     
     % =========================================================================
@@ -537,22 +644,217 @@ classdef Coordinates < Exportable & handle
             fh = showCoordinatesENU(coo_list);
         end
         
-        function fh = showCoordinatesENU(coo_list, coo_ref)
-            % Plot East North Up coordinates
+        function fh_list = showCoordinates(mode, coo_list, coo_ref, n_obs)
+            % Plot ENU or XYZ coordinates
             %
-            % SYNTAX 
-            %   this.showCoordinatesENU(coo_list);
+            % SYNTAX
+            %   this.showCoordinates(coo_list);
             
-            str_title{1} = sprintf('Position stability ENU [mm]\nSTD (detrended)');
+            if strcmpi(mode, 'XYZ')
+                mode = 'XYZ';
+                axis_label = {'ECEF X', 'ECEF Y', 'ECEF Z'};
+            else
+                mode = 'ENU';
+                axis_label = {'East', 'North', 'Up'};
+            end
+            fh_list = [];
+            thr = 0.8;
+            
             str_title{2} = sprintf('STD (detrended)');
             str_title{3} = sprintf('STD (detrended)');
+            log = Core.getLogger();
+            for i = 1 : numel(coo_list)
+                pos = coo_list(i);
+                
+                if ~pos.isEmpty
+                    if nargin < 3 || isempty(coo_ref)
+                        if not(isempty(pos.name))
+                            str_title{1} = sprintf('%s\nPosition stability %s [mm]\nSTD (detrended)', pos.name, mode);
+                            fig_name = sprintf('d%s %s', mode, pos.name);
+                        else
+                            str_title{1} = sprintf('Position stability %s [mm]\nSTD (detrended)', mode);
+                            fig_name = sprintf('d%s', mode);
+                        end
+                        
+                        if strcmpi(mode, 'XYZ')
+                            pos_diff = (pos.getXYZ - pos.getMedianPos.getXYZ) * 1e3;
+                        elseif strcmpi(mode, 'ENU')
+                            pos_diff = pos.getLocal(pos.getMedianPos) * 1e3;
+                        end
+                        flag_time = true;
+                        if isa(pos.time, 'GPS_Time') && ~pos.time.isEmpty
+                            t = pos.time.getMatlabTime;
+                            if numel(t) < size(pos_diff,1)
+                                log.addWarning(sprintf('Coordinates are corrupted, it seems that there are more coordinates than times\n plotting only the positions with time'))
+                                pos_diff = pos_diff(1:numel(t),:);
+                            elseif numel(t) > size(pos_diff,1)
+                                log.addWarning(sprintf('Coordinates are corrupted, it seems that there are more times than coordinates\n plotting only the first positions'))
+                                t = t(1:size(pos_diff,1),:);
+                            end
+                        else
+                            flag_time = false;
+                            t = (1 : size(pos_diff, 1))';
+                        end
+                    elseif nargin > 2 && not(isempty(coo_ref)) % plot baseline
+                        if not(isempty(pos.name))
+                            str_title{1} = sprintf('%s - %s\nBaseline stability %s [mm]\nSTD (detrended)', pos.name, coo_ref.name, mode);
+                            fig_name = sprintf('d%s %s - %s', mode, pos.name, coo_ref.name);
+                        else
+                            str_title{1} = sprintf('Baseline stability %s [mm]\nSTD (detrended)', mode);
+                            fig_name = sprintf('d%s bsl', mode);
+                        end
+                        
+                        pos_diff = [];
+                        if isa(pos.time, 'GPS_Time') && ~pos.time.isEmpty
+                            [t_comm, idx_1, idx2] = intersect(round(coo_ref.time.getRefTime(pos.time.first.getMatlabTime)),round(pos.time.getRefTime(pos.time.first.getMatlabTime)));
+                            t = pos.time.first.getMatlabTime + t_comm/86400;
+                            if strcmpi(mode, 'XYZ')
+                                pos_diff = (pos.xyz(idx2,:) - coo_ref.xyz(idx_1,:))*1e3;
+                                pos_diff = bsxfun(@minus, pos_diff, median(pos_diff,1, 'omitnan'));
+                            elseif strcmpi(mode, 'ENU')
+                                pos_diff = Coordinates.cart2local(median(coo_ref.xyz,1,'omitnan'),pos.xyz(idx2,:) - coo_ref.xyz(idx_1,:) )*1e3;
+                            end
+                            flag_time = true;
+                        else
+                            if numel(coo_ref.xyz) == numel(pos.xyz)
+                                pos_diff = Coordinates.cart2local(median(coo_ref.xyz,1,'omitnan'),pos.xyz - coo_ref.xyz)*1e3;
+                                t = t(1:size(pos_diff,1),:);
+                                flag_time = false;
+                            else
+                                log.addError(sprintf('No time in coordinates and number off coordinates in ref different from coordinate in the second receiver'))
+                            end
+                        end
+                        pos_diff = bsxfun(@minus, pos_diff,median(pos_diff,1,'omitnan'));
+                    end
+                    
+                    
+                    fh = figure('Visible', 'off');  subplot(3,1,1); Core_UI.beautifyFig(fh);
+                    fh.Name = sprintf('%03d: %s', fh.Number, fig_name);  fh.NumberTitle = 'off';
+                    
+                    if size(pos_diff, 1) > 1
+                        if nargin >= 4 && n_obs > 0
+                            id_ok = (max(1, size(pos_diff,1) - n_obs + 1)) : size(pos_diff,1);
+                            pos_diff = pos_diff(id_ok, :);
+                            t = t(id_ok);
+                        end
+                        
+                        if numel(coo_list) == 1
+                            color_order = Core_UI.getColor(1:3,3);
+                        else
+                            color_order = Core_UI.getColor(i * [1 1 1], numel(coo_list));
+                        end      
+                        
+                        setAxis(fh, 1);
+                        e = pos_diff(:,1);
+                        if thr < 1
+                            [data, lid_ko, trend] = strongFilterStaticData(e, 0.8, 7);
+                            setAxis(fh, 1);
+                            Core_Utils.plotSep(t, e, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', [0.5 0.5 0.5]); hold on;
+                            Core_Utils.plotSep(t, data, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', color_order(1,:));
+                            e = data;
+                        else
+                            setAxis(fh, 1);
+                            Core_Utils.plotSep(t, e, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', color_order(1,:)); hold on;
+                            lid_ko = false(numel(t), 1);
+                            trend = Core_Utils.interp1LS(t(~isnan(pos_diff(:,1))), pos_diff(~isnan(pos_diff(:,1)),1), 1, t);
+                        end
+                        setAxis(fh, 1);
+                        ax(3) = gca(fh);
+                        if (t(end) > t(1))
+                            xlim([t(1) t(end)]);
+                        end
+                        yl = minMax(e);
+                        ylim([min(-20, yl(1)) max(20, yl(2))]);
+                        if flag_time
+                            setTimeTicks(4);
+                        end
+                        h = ylabel([axis_label{1} ' [mm]']); h.FontWeight = 'bold';
+                        grid on;
+                        str_title{1} = sprintf('%s %s%.2f', str_title{1}, iif(i>1, '- ', ''), std((e(~lid_ko) - trend(~lid_ko)), 'omitnan'));
+                        h = title(str_title{1}, 'interpreter', 'none'); h.FontWeight = 'bold';
+                        subplot(3,1,2);
+                        
+                        n = pos_diff(:,2);                        
+                        if thr < 1
+                            [data, lid_ko, trend] = strongFilterStaticData(n, 0.8, 7);
+                            setAxis(fh, 2);
+                         Core_Utils.plotSep(t, n, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', [0.5 0.5 0.5]); hold on;
+                            Core_Utils.plotSep(t, data, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', color_order(2,:)); 
+                            n = data;
+                        else
+                            setAxis(fh, 2);
+                        Core_Utils.plotSep(t, n, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', color_order(2,:)); hold on;
+                            trend = Core_Utils.interp1LS(t(~isnan(pos_diff(:,2))), pos_diff(~isnan(pos_diff(:,2)),2), 1, t);
+                        end
+                        ax(2) = gca(fh);
+                        if (t(end) > t(1))
+                            xlim([t(1) t(end)]);
+                        end
+                        yl = minMax(n);
+                        ylim([min(-20, yl(1)) max(20, yl(2))]);
+                        if flag_time
+                            setTimeTicks(4);
+                        end
+                        h = ylabel([axis_label{2} ' [mm]']); h.FontWeight = 'bold';
+                        str_title{2} = sprintf('%s %s%.2f', str_title{2}, iif(i>1, '- ', ''), std((n(~lid_ko) - trend(~lid_ko)), 'omitnan'));
+                        h = title(str_title{2}, 'interpreter', 'none'); h.FontWeight = 'bold';
+                        grid on;
+                        subplot(3,1,3);
+                        
+                        up = pos_diff(:,3);                        
+                        if thr < 1
+                            [data, lid_ko, trend] = strongFilterStaticData(up, 0.8, 7);
+                            setAxis(fh, 3);
+                        Core_Utils.plotSep(t, up, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', [0.5 0.5 0.5]); hold on;
+                            Core_Utils.plotSep(t, data, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', color_order(3,:)); 
+                            up = data;
+                        else
+                            trend = Core_Utils.interp1LS(t(~isnan(pos_diff(:,3))), pos_diff(~isnan(pos_diff(:,3)),3), 1, t);
+                            setAxis(fh, 3);
+                        Core_Utils.plotSep(t, up, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', color_order(3,:)); hold on;
+                        end
+                        ax(1) = gca(fh);
+                        if (t(end) > t(1))
+                            xlim([t(1) t(end)]);
+                        end
+                        yl = minMax(up);
+                        ylim([min(-20, yl(1)) max(20, yl(2))]);
+                        if flag_time
+                            setTimeTicks(4);
+                        end
+                        h = ylabel([axis_label{3} ' [mm]']); h.FontWeight = 'bold';
+                        str_title{3} = sprintf('%s %s%.2f', str_title{3}, iif(i>1, '- ', ''), std((up(~lid_ko) - trend(~lid_ko)), 'omitnan'));
+                        h = title(str_title{3}, 'interpreter', 'none'); h.FontWeight = 'bold';
+                        grid on;
+                        linkaxes(ax, 'x');
+                        grid on;
+                    else
+                        log.addMessage('Plotting a single point static coordinates is not yet supported');
+                    end
+                    fh_list = [fh_list fh];
+                    Core_UI.beautifyFig(fh);
+                    Core_UI.addBeautifyMenu(fh);
+                    fh.Visible = iif(Core_UI.isHideFig, 'off', 'on'); drawnow;
+                end
+            end
+            
+        end
+
+        function [lid_ko, time, lid_ko_enu, trend_enu] = getBadSession(coo_list, coo_ref, n_obs)
+            % Get outliers in East North Up coordinates
+            %
+            % SYNTAX 
+            %   [lid_ko lid_ko_enu, trend_enu] = getBadSession(coo_list, coo_ref, n_obs);
+            
+            thr = 0.8;
+            time = {};
             log = Core.getLogger();
             fh = figure('Visible', 'off'); Core_UI.beautifyFig(fh);
             for i = 1 : numel(coo_list)
                 pos = coo_list(i);
                 if ~pos.isEmpty
                     
-                    if nargin == 1
+                    if nargin == 1 || isempty(coo_ref)
                         enu_diff = pos.getLocal(pos.getMedianPos) * 1e3;
                         flag_time = true;
                         if isa(pos.time, 'GPS_Time') && ~pos.time.isEmpty
@@ -575,7 +877,6 @@ classdef Coordinates < Exportable & handle
                             t = pos.time.first.getMatlabTime + t_comm/86400;
                             enu_diff = Coordinates.cart2local(median(coo_ref.xyz,1,'omitnan'),pos.xyz(idx2,:) - coo_ref.xyz(idx_1,:) )*1e3;
                             flag_time = true;
-                            
                         else
                             if numel(coo_ref.xyz) == numel(pos.xyz)
                                 enu_diff = Coordinates.cart2local(median(coo_ref.xyz,1,'omitnan'),pos.xyz - coo_ref.xyz)*1e3;
@@ -586,102 +887,46 @@ classdef Coordinates < Exportable & handle
                             end
                         end
                         enu_diff = bsxfun(@minus, enu_diff,median(enu_diff,1,'omitnan'));
-
                     end
-                    if size(enu_diff, 1) > 1
-                        if numel(coo_list) > 1
-                            fh.Name = sprintf('%03d: dENU MR', fh.Number); fh.NumberTitle = 'off';
-                        else
-                            fh.Name = sprintf('%03d: dENU', fh.Number); fh.NumberTitle = 'off';
-                        end
-                        
-                        if numel(coo_list) == 1
-                            color_order = Core_UI.getColor(1:3,3);
-                        else
-                            color_order = Core_UI.getColor(i * [1 1 1], numel(coo_list));
-                        end                                                
-                                                
-                        subplot(3,1,1);                       
-                        e = enu_diff(1:numel(t),1);
-                        figure(fh);
-                        Core_Utils.plotSep(t, e, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', color_order(1,:)); hold on;
-                        ax(3) = gca();
-                        if (t(end) > t(1))
-                            xlim([t(1) t(end)]);
-                        end
-                        yl = minMax(e);
-                        ylim([min(-20, yl(1)) max(20, yl(2))]);
-                        if flag_time
-                            setTimeTicks(4); h = ylabel('East [mm]'); h.FontWeight = 'bold';
-                        end
-                        grid on;
-                        trend = Core_Utils.interp1LS(t(~isnan(enu_diff(:,1))), enu_diff(~isnan(enu_diff(:,1)),1), 1, t);
-                        if (t(end)-t(1) > 199) && flag_time
-                            ttmp = t(~isnan(enu_diff(:,1)));
-                            [filtered, ~, ~, splined] = splinerMat(t(~isnan(enu_diff(:,1))), enu_diff(~isnan(enu_diff(:,1)),1), 365/4, 1e-8, ttmp(1):ttmp(end));
-                            plot(ttmp(1):ttmp(end), splined, 'k');
-                            trend(~isnan(enu_diff(:,1))) = filtered;
-                        end
-                        str_title{1} = sprintf('%s %s%.2f', str_title{1}, iif(i>1, '- ', ''), std((enu_diff(:,1) - trend(:)), 'omitnan'));
-                        h = title(str_title{1}, 'interpreter', 'none'); h.FontWeight = 'bold';
-                        subplot(3,1,2);
-                        
-                        n = enu_diff(:,2);                        
-                        figure(fh);
-                        Core_Utils.plotSep(t, n, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', color_order(2,:)); hold on;
-                        ax(2) = gca();
-                        if (t(end) > t(1))
-                            xlim([t(1) t(end)]);
-                        end
-                        yl = minMax(n);
-                        ylim([min(-20, yl(1)) max(20, yl(2))]);
-                        if flag_time 
-                            setTimeTicks(4); h = ylabel('North [mm]'); h.FontWeight = 'bold';
-                        end
-                        trend = Core_Utils.interp1LS(t(~isnan(enu_diff(:,2))), enu_diff(~isnan(enu_diff(:,2)),2), 1, t);
-                        if (t(end)-t(1) > 199) && flag_time
-                            ttmp = t(~isnan(enu_diff(:,2)));
-                            [filtered, ~, ~, splined] = splinerMat(t(~isnan(enu_diff(:,2))), enu_diff(~isnan(enu_diff(:,2)),2), 365/4, 1e-8, ttmp(1):ttmp(end));
-                            plot(ttmp(1):ttmp(end), splined, 'k');
-                            trend(~isnan(enu_diff(:,1))) = filtered;
-                        end
-                        str_title{2} = sprintf('%s %s%.2f', str_title{2}, iif(i>1, '- ', ''), std((enu_diff(:,2) - trend(:)), 'omitnan'));
-                        h = title(str_title{2}, 'interpreter', 'none'); h.FontWeight = 'bold';
-                        grid on;
-                        subplot(3,1,3);
-                        
-                        up = enu_diff(:,3);                        
-                        figure(fh);
-                        Core_Utils.plotSep(t, up, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', color_order(3,:)); hold on;
-                        ax(1) = gca();
-                        if (t(end) > t(1))
-                            xlim([t(1) t(end)]);
-                        end
-                        yl = minMax(up);
-                        ylim([min(-20, yl(1)) max(20, yl(2))]);
-                        if flag_time
-                            setTimeTicks(4); h = ylabel('Up [mm]'); h.FontWeight = 'bold';
-                        end
-                        trend = Core_Utils.interp1LS(t(~isnan(enu_diff(:,3))), enu_diff(~isnan(enu_diff(:,3)),3), 1, t);
-                        if (t(end)-t(1) > 199) && flag_time
-                            ttmp = t(~isnan(enu_diff(:,3)));
-                            [filtered, ~, ~, splined] = splinerMat(t(~isnan(enu_diff(:,3))), enu_diff(~isnan(enu_diff(:,3)),3), 365/4, 1e-8, ttmp(1):ttmp(end));
-                            plot(ttmp(1):ttmp(end), splined, 'k');
-                            trend(~isnan(enu_diff(:,1))) = filtered;
-                        end
-                        str_title{3} = sprintf('%s %s%.2f', str_title{3}, iif(i>1, '- ', ''), std((enu_diff(:,3) - trend(:)), 'omitnan'));
-                        h = title(str_title{3}, 'interpreter', 'none'); h.FontWeight = 'bold';
-                        grid on;
-                        linkaxes(ax, 'x');
-                        grid on;
-                    else
-                        log.addMessage('Plotting a single point static coordinates is not yet supported');
+                    
+                    if nargin >= 2 && n_obs > 0
+                        id_ok = (max(1, size(enu_diff,1) - n_obs + 1)) : size(enu_diff,1);
+                        enu_diff = enu_diff(id_ok, :);
+                        t = t(id_ok);
                     end
+                    
+                    e = enu_diff(1:numel(t),1);
+                    [data, lid_ko_enu{i}(:,1), trend_enu{i}(:,1)] = strongFilterStaticData(e, 0.8, 7);
+                    
+                    n = enu_diff(:,2);
+                    [data, lid_ko_enu{i}(:,2), trend_enu{i}(:,1)] = strongFilterStaticData(n, 0.8, 7);
+                    
+                    up = enu_diff(:,3);
+                    [data, lid_ko_enu{i}(:,3), trend_enu{i}(:,1)] = strongFilterStaticData(up, 0.8, 7);
+                    
+                    lid_ko = isnan(e) | lid_ko_enu{i}(:,1) | isnan(n) | lid_ko_enu{i}(:,2) | isnan(up) | lid_ko_enu{i}(:,3);
+                    time{i} = t;
                 end
             end
-            Core_UI.beautifyFig(fh);
-            Core_UI.addBeautifyMenu(fh);
-            fh.Visible = 'on'; drawnow;
+            if numel(lid_ko) == 1
+                lid_ko = lid_ko{1};
+                lid_ko_enu = lid_ko_enu{1};
+                trend_enu = trend_enu{1};
+                time = time{1};
+            end
+        end
+
+        function fh = showCoordinatesENU(coo_list, coo_ref, n_obs)
+            % Plot East North Up coordinates
+            %
+            % SYNTAX 
+            %   this.showCoordinatesENU(coo_list);
+            
+            switch nargin
+                case 1, fh = showCoordinates('ENU', coo_list);
+                case 2, fh = showCoordinates('ENU', coo_list, coo_ref);
+                case 3, fh = showCoordinates('ENU', coo_list, coo_ref, n_obs);
+            end
         end
         
         function fh = showPositionXYZ(coo_list)
@@ -692,107 +937,27 @@ classdef Coordinates < Exportable & handle
            fh = showCoordinatesXYZ(coo_list);
         end
         
-        function fh = showCoordinatesXYZ(coo_list)
+        function fh = showCoordinatesXYZ(coo_list, coo_ref, n_obs)
             % Plot X Y Z coordinates
             %
             % SYNTAX
             %   this.showCoordinatesXYZ(coo_list);
-            
-            str_title{1} = sprintf('Position stability XYZ [mm]\nSTD (detrended)');
-            str_title{2} = sprintf('STD (detrended)');
-            str_title{3} = sprintf('STD (detrended)');
-            log = Core.getLogger();
-            fh = figure('Visible', 'off'); Core_UI.beautifyFig(fh);
-            for i = 1 : numel(coo_list)
-                pos = coo_list(i);
-                if ~pos.isEmpty
-                    xyz_diff = (pos.getXYZ - pos.getMedianPos.getXYZ) * 1e3;                    
-                    if size(xyz_diff, 1) > 1
-                        if numel(coo_list) > 1
-                            fh.Name = sprintf('%03d: dXYZ MR', fh.Number); fh.NumberTitle = 'off';
-                        else
-                            fh.Name = sprintf('%03d: dXYZ', fh.Number); fh.NumberTitle = 'off';
-                        end
-                        
-                        if numel(coo_list) == 1
-                            color_order = Core_UI.getColor(1:3,3);
-                        else
-                            color_order = Core_UI.getColor(i * [1 1 1], numel(coo_list));
-                        end                                                
-                        
-                        if isa(pos.time, 'GPS_Time') && ~pos.time.isEmpty
-                            t = pos.time.getMatlabTime;
-                            if numel(t) < size(xyz_diff,1)
-                                log.addWarning(sprintf('Coordinates are corrupted, it seems that there are more coordinates than times\n plotting only the positions with time'))
-                                xyz_diff = xyz_diff(1:numel(t),:);
-                            elseif numel(t) > size(xyz_diff,1)
-                                log.addWarning(sprintf('Coordinates are corrupted, it seems that there are more times than coordinates\n plotting only the first positions'))
-                                t = t(1:size(xyz_diff,1),:);
-                            end
-                        else
-                            t = 1 : size(xyz_diff, 1);
-                        end
-                        
-                        subplot(3,1,1);
-                        e = xyz_diff(:,1);
-                        figure(fh);
-                        Core_Utils.plotSep(t, e, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', color_order(1,:)); hold on;
-                        ax(3) = gca();
-                        if (t(end) > t(1))
-                            xlim([t(1) t(end)]);
-                        end
-                        yl = minMax(e);
-                        ylim([min(-20, yl(1)) max(20, yl(2))]);
-                        setTimeTicks(4); h = ylabel('X [mm]'); h.FontWeight = 'bold';
-                        grid on;
-                        trend = Core_Utils.interp1LS(t(~isnan(xyz_diff(:,1))), xyz_diff(~isnan(xyz_diff(:,1)),1), 1, t);
-                        str_title{1} = sprintf('%s %s%.2f', str_title{1}, iif(i>1, '- ', ''), std((xyz_diff(:,1) - trend(:)), 'omitnan'));
-                        h = title(str_title{1}, 'interpreter', 'none'); h.FontWeight = 'bold';
-                        subplot(3,1,2);
-                        
-                        n = xyz_diff(:,2);                        
-                        figure(fh);
-                        Core_Utils.plotSep(t, n, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', color_order(2,:)); hold on;
-                        ax(2) = gca();
-                        if (t(end) > t(1))
-                            xlim([t(1) t(end)]);
-                        end
-                        yl = minMax(n);
-                        ylim([min(-20, yl(1)) max(20, yl(2))]);
-                        setTimeTicks(4); h = ylabel('Y [mm]'); h.FontWeight = 'bold';
-                        trend = Core_Utils.interp1LS(t(~isnan(xyz_diff(:,2))), xyz_diff(~isnan(xyz_diff(:,2)),2), 1, t);
-                        str_title{2} = sprintf('%s %s%.2f', str_title{2}, iif(i>1, '- ', ''), std((xyz_diff(:,2) - trend(:)), 'omitnan'));
-                        h = title(str_title{2}, 'interpreter', 'none'); h.FontWeight = 'bold';
-                        grid on;
-                        subplot(3,1,3);
-                        
-                        up = xyz_diff(:,3);                        
-                        figure(fh);
-                        Core_Utils.plotSep(t, up, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', color_order(3,:)); hold on;
-                        ax(1) = gca();
-                        if (t(end) > t(1))
-                            xlim([t(1) t(end)]);
-                        end
-                        yl = minMax(up);
-                        ylim([min(-20, yl(1)) max(20, yl(2))]);
-                        setTimeTicks(4); h = ylabel('Z [mm]'); h.FontWeight = 'bold';
-                        trend = Core_Utils.interp1LS(t(~isnan(xyz_diff(:,3))), xyz_diff(~isnan(xyz_diff(:,3)),3), 1, t);
-                        str_title{3} = sprintf('%s %s%.2f', str_title{3}, iif(i>1, '- ', ''), std((xyz_diff(:,3) - trend(:)), 'omitnan'));
-                        h = title(str_title{3}, 'interpreter', 'none'); h.FontWeight = 'bold';
-                        grid on;
-                        linkaxes(ax, 'x');
-                        grid on;
-                    else
-                        log.addMessage('Plotting a single point static coordinates is not yet supported');
-                    end
-                end
+            switch nargin
+                case 1, fh = showCoordinates('XYZ', coo_list);
+                case 2, fh = showCoordinates('XYZ', coo_list, coo_ref);
+                case 3, fh = showCoordinates('XYZ', coo_list, coo_ref, n_obs);
             end
-            Core_UI.beautifyFig(fh);
-            Core_UI.addBeautifyMenu(fh);
-            fh.Visible = 'on'; drawnow;
         end
         
         function fh = showPositionPlanarUp(coo_list)
+            % Plot East North Up coordinates
+            %
+            % SYNTAX 
+            %   this.showPositionENU(coo_list);
+            fh = showCoordinatesENU(coo_list);
+        end
+        
+        function fh = showCoordinatesPlanarUp(coo_list, coo_ref, n_obs)
             % Plot East North Up coordinates
             %
             % SYNTAX 
@@ -801,9 +966,49 @@ classdef Coordinates < Exportable & handle
             log = Core.getLogger();
             for i = 1 : numel(coo_list)
                 pos = coo_list(i);
-                if ~pos.isEmpty                    
-                    enu_diff = pos.getLocal(pos.getMedianPos) * 1e3;
+                if ~pos.isEmpty
+                    
+                    if nargin == 1 || isempty(coo_ref)
+                        enu_diff = pos.getLocal(pos.getMedianPos) * 1e3;
+                        flag_time = true;
+                        if isa(pos.time, 'GPS_Time') && ~pos.time.isEmpty
+                            t = pos.time.getMatlabTime;
+                            if numel(t) < size(enu_diff,1)
+                                log.addWarning(sprintf('Coordinates are corrupted, it seems that there are more coordinates than times\n plotting only the positions with time'))
+                                enu_diff = enu_diff(1:numel(t),:);
+                            elseif numel(t) > size(enu_diff,1)
+                                log.addWarning(sprintf('Coordinates are corrupted, it seems that there are more times than coordinates\n plotting only the first positions'))
+                                t = t(1:size(enu_diff,1),:);
+                            end
+                        else
+                            flag_time = false;
+                            t = (1 : size(enu_diff, 1))';
+                        end
+                    elseif nargin > 1 % plot baseline
+                        enu_diff = [];
+                        if isa(pos.time, 'GPS_Time') && ~pos.time.isEmpty
+                            [t_comm, idx_1, idx2] = intersect(round(coo_ref.time.getRefTime(pos.time.first.getMatlabTime)),round(pos.time.getRefTime(pos.time.first.getMatlabTime)));
+                            t = pos.time.first.getMatlabTime + t_comm/86400;
+                            enu_diff = Coordinates.cart2local(median(coo_ref.xyz,1,'omitnan'),pos.xyz(idx2,:) - coo_ref.xyz(idx_1,:) )*1e3;
+                            flag_time = true;
+                        else
+                            if numel(coo_ref.xyz) == numel(pos.xyz)
+                                enu_diff = Coordinates.cart2local(median(coo_ref.xyz,1,'omitnan'),pos.xyz - coo_ref.xyz)*1e3;
+                                t = t(1:size(enu_diff,1),:);
+                                flag_time = false;
+                            else
+                                log.addError(sprintf('No time in coordinates and number off coordinates in ref different from coordinate in the second receiver'))
+                            end
+                        end
+                        enu_diff = bsxfun(@minus, enu_diff,median(enu_diff,1,'omitnan'));
+                    end
                     if size(enu_diff, 1) > 1
+                        
+                        if nargin >= 2 && n_obs > 0
+                            id_ok = (max(1, size(enu_diff,1) - n_obs + 1)) : size(enu_diff,1);
+                            enu_diff = enu_diff(id_ok, :);
+                            t = t(id_ok);
+                        end
                         str_title{1} = sprintf('Position detrended planar Up [mm]\nSTD (detrended)');
                         str_title{3} = sprintf('STD (detrended)');
                         fh = figure('Visible', 'off'); Core_UI.beautifyFig(fh);
@@ -817,20 +1022,7 @@ classdef Coordinates < Exportable & handle
                             color_order = Core_UI.getColor(1:3,3);
                         else
                             color_order = Core_UI.getColor(i * [1 1 1], numel(coo_list));
-                        end                                                
-                        
-                        if isa(pos.time, 'GPS_Time') && ~pos.time.isEmpty
-                            t = pos.time.getMatlabTime;
-                            if numel(t) < size(enu_diff,1)
-                                log.addWarning(sprintf('Coordinates are corrupted, it seems that there are more coordinates than times\n plotting only the positions with time'))
-                                enu_diff = enu_diff(1:numel(t),:);
-                            elseif numel(t) > size(enu_diff,1)
-                                log.addWarning(sprintf('Coordinates are corrupted, it seems that there are more times than coordinates\n plotting only the first positions'))
-                                t = t(1:size(enu_diff,1),:);
-                            end
-                        else
-                            t = 1 : size(enu_diff, 1);
-                        end
+                        end    
                         
                         trend_e = Core_Utils.interp1LS(t(~isnan(enu_diff(:,1))), enu_diff(~isnan(enu_diff(:,1)),1), 1, t);
                         trend_n = Core_Utils.interp1LS(t(~isnan(enu_diff(:,2))), enu_diff(~isnan(enu_diff(:,2)),2), 2, t);
@@ -865,13 +1057,20 @@ classdef Coordinates < Exportable & handle
                         % dashed
                         id_dashed = serialize(bsxfun(@plus, repmat((0:20:395)',1,5), (1:5)));
                         az_l(id_dashed) = nan;
-                        decl_s = ((10 : 10 : max_r));
+                        step = max(1, floor((max_r/10)/5)) * 10;
+                        if step > 10
+                            step = round(step/50)*50;
+                        end
+                        if step > 100
+                            step = round(step/100)*100;
+                        end    
+                        decl_s = ((step : step  : max_r));
                         for d = decl_s
                             x = cos(az_l).*d;
                             y = sin(az_l).*d;
                             plot(x,y,'color',[0.6 0.6 0.6], 'LineWidth', 2); hold on;
-                            x = cos(az_l).*(d-5);
-                            y = sin(az_l).*(d-5);
+                            x = cos(az_l).*(d-step/2);
+                            y = sin(az_l).*(d-step/2);
                             plot(x,y,'color',[0.75 0.75 0.75], 'LineWidth', 2); hold on;
                         end
                         
@@ -887,22 +1086,22 @@ classdef Coordinates < Exportable & handle
                         h = title(str_title{1}, 'interpreter', 'none'); h.FontWeight = 'bold';
                         h.FontWeight = 'bold';
                         
-                        figure(fh);
+                        set(0, 'CurrentFigure', fh);;
                         ax = axes('Parent', tmp_box2);
                         up = enu_diff(:,3);                        
                         Core_Utils.plotSep(t, up + trend_u(:), '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', color_order(3,:)); hold on;
-                        ax(1) = gca();
+                        ax(1) = gca(fh);
                         if (t(end) > t(1))
                             xlim([t(1) t(end)]);
                         end
-                        yl = minMax(up);
+                        yl = [-1 1] * max(abs([perc(up + trend_u(:), 0.05)*3 perc(up + trend_u(:), 0.95)*3]));
                         ylim([min(-20, yl(1)) max(20, yl(2))]);
                         setTimeTicks(4); h = ylabel('Up [mm]'); h.FontWeight = 'bold';
                         grid on;
                         drawnow;                        
                         Core_UI.beautifyFig(fh);
                         Core_UI.addBeautifyMenu(fh);
-                        fh.Visible = 'on'; 
+                        fh.Visible = iif(Core_UI.isHideFig, 'off', 'on'); 
                     else
                         log.addMessage('Plotting a single point static coordinates is not yet supported');
                     end
@@ -915,7 +1114,11 @@ classdef Coordinates < Exportable & handle
     %    OPERATIONS
     % =========================================================================
     
-    methods (Access = 'public')                        
+    methods (Access = 'public')
+        function this = importCoo(this, file_name)
+            this = Coordinates.fromCooFile(file_name);
+        end
+        
         function res = eq(coo1, coo2)
             %%% DESCRIPTION: check if two coordinates are equal
             d = sqrt(sum((coo1.xyz - coo2.xyz).^2, 2));
@@ -942,25 +1145,92 @@ classdef Coordinates < Exportable & handle
         
     
     methods (Access = 'public', Static)
-        function ondu = getOrthometricCorrFromLatLon(lat, lon)
-            % Get Orthometric correction from the geoid loaded in Core
-            %
-            % INPUT
-            %   lat, lon    [radians]
+        function N = getOrthometricCorrFromLatLon(phi, lam, geoid, method)
             % SYNTAX:
-            %   ondu = getOrthometricCorrFromLatLon(lat, lon);
+            %   N = getOrthometricCorr(phi, lam, geoid);
+            %
+            % EXAMPLE:
+            %   core = Core.getInstance;
+            %   core.initGeoid();
+            %   Coordinates.getOrthometricCorrFromLatLon(45.69 ./ 180*pi, 9.03 ./ 180*pi)
+            %   % answer should be 46.1767008
+            %
+            % INPUT:
+            %   phi     = geodetic latitude                [deg (rad only for legacy method)]
+            %   lam     = geodetic longitude               [deg (rad only for legacy method)]
+            %   geoid   = regular map in geocentric coordinates <default = EGM08 0.5x0.5 deg>
+            %   method  = interpolation approach:
+            %              - legacy
+            %              - grid
+            %              - grid_cubic  ( phi, lam are array of grid coordinates )
+            %              - grid_akima  ( phi, lam are array of grid coordinates )
+            %              - linear
+            %              - natural
+            %
+            % OUTPUT:
+            %   N       = geoid ondulation [m]
+            %
+            % DESCRIPTION:
+            %   Get the geoid ondulation (orthometric correction)
+
+            if (nargin < 3) || isempty(geoid)
+                geoid = Core.getRefGeoid();
+            end
             
-            geoid = Core.getRefGeoid();
             if (geoid.grid == 0)
                 core = Core.getInstance(false);
                 core.initGeoid();
                 geoid = core.getRefGeoid();
             end
             
-            ondu = zeros(numel(lon), 1);
-            for i = 1 : numel(lon)
-                ondu(i) = grid_bilin_interp(lon(i) * Coordinates.RAD2DEG, lat(i) * Coordinates.RAD2DEG, geoid.grid, geoid.ncols, geoid.nrows, geoid.cellsize, geoid.Xll, geoid.Yll, -9999);
-            end            
+            if (nargin < 4) || isempty(method)
+                method = 'legacy';
+            end
+
+            if  (geoid.ncols == 0 || geoid.nrows == 0)
+                Core.initGeoid();
+                geoid = Core.getRefGeoid();
+            end
+            N = zeros(numel(lam), 1);
+
+            switch method
+                case 'legacy'
+                    for i = 1 : numel(lam)
+                        N(i) = grid_bilin_interp(lam(i) / pi * 180, phi(i) / pi * 180, geoid.grid, geoid.ncols, geoid.nrows, geoid.cellsize, geoid.Xll, geoid.Yll, -9999);
+                    end
+                case 'grid'
+                    x_grid = geoid.Xll + geoid.cellsize * (0 : geoid.ncols - 1);
+                    y_grid = fliplr(geoid.Yll + geoid.cellsize * (0 : geoid.nrows - 1));
+
+                    [xmg, ymg] = meshgrid(x_grid, y_grid);
+                    N = interp2(xmg, ymg, geoid.grid, lam, phi, 'linear');
+                case 'grid_cubic'
+                    x_grid = geoid.Xll + geoid.cellsize * (0 : geoid.ncols - 1);
+                    y_grid = fliplr(geoid.Yll + geoid.cellsize * (0 : geoid.nrows - 1));
+
+                    [xmg, ymg] = meshgrid(x_grid, y_grid);
+                    N = interp2(xmg, ymg, geoid.grid, lam, phi, 'cubic');
+                case 'grid_akima'
+                    x_grid = geoid.Xll + geoid.cellsize * (0 : geoid.ncols - 1);
+                    y_grid = fliplr(geoid.Yll + geoid.cellsize * (0 : geoid.nrows - 1));
+
+                    [xmg, ymg] = meshgrid(x_grid, y_grid);
+                    N = interp2(xmg, ymg, geoid.grid, lam, phi, 'makima');
+                case 'linear'
+                    x_grid = geoid.Xll + geoid.cellsize * (0 : geoid.ncols - 1);
+                    y_grid = fliplr(geoid.Yll + geoid.cellsize * (0 : geoid.nrows - 1));
+                    [xmg, ymg] = meshgrid(x_grid, y_grid);
+                    finterp = scatteredInterpolant(xmg(:), ymg(:), geoid.grid(:), 'linear');
+
+                    N = finterp(lam, phi);
+                case 'natural'
+                    x_grid = geoid.Xll + geoid.cellsize * (0 : geoid.ncols - 1);
+                    y_grid = fliplr(geoid.Yll + geoid.cellsize * (0 : geoid.nrows - 1));
+
+                    [xmg, ymg] = meshgrid(x_grid, y_grid);
+                    finterp = scatteredInterpolant(xmg(:), ymg(:), geoid.grid(:), 'natural');
+                    N = finterp(lam, phi);
+            end
         end
         
         function [lat, lon, h, lat_geoc] = cart2geod(xyz, y, z)
@@ -1264,6 +1534,187 @@ classdef Coordinates < Exportable & handle
             
             fh = coo_list.showPositionENU();
         end
+        
+        function bslCompare(coo_list_0, coo_list_1, id_ref, spline_base, outlier_thr, y_lim)
+            % Compare two sets of receivers coordinates (e.g. coming from two different execution)
+            %
+            % INPUT
+            %   coo_list_0           first set of GNSS receivers or coordinates
+            %   coo_list_1           second set of GNSS receivers or coordinates
+            %   id_ref               id of the reference receiver
+            %                        DEFAULT: last receiver
+            %   spline_base          spline base in days (for removing splines)
+            %                        DEFAULT: 365/4
+            %   outlier_threshold    threshold on the baseline difference for the
+            %                        spline and STD computation [mm]
+            %                        DEFAULT: 2 mm
+            %   y_lim                3 x 2 ylimits
+            %
+            % SINTAX
+            %   Coordinates.bslCompare(rec_list_0, rec_list_1, id_ref, spline_base, outlier_thr)
+            %
+            % EXAMPLE
+            %   Coordinates.bslCompare(nomp.core.rec, core.rec, 7, 365/4, 2);
+            
+            if nargin < 3 || isempty(id_ref)
+                id_ref = numel(coo_list_0); % set to the last;
+            end
+            if nargin < 4 || isempty(spline_base)
+                spline_base = 365/4;
+            end
+            % Set outlier treshold (on baseline differrence);
+            if nargin < 5 || isempty(outlier_thr)
+                outlier_thr = 2;
+            end
+            
+            if isa(coo_list_0, 'Coordinates')
+                coo_ref0 = coo_list_0(id_ref);
+            else
+                coo_ref0 = coo_list_0(id_ref).getPos;
+            end
+            if isa(coo_list_1, 'Coordinates')
+                coo_ref1 = coo_list_1(id_ref);
+            else
+                coo_ref1 = coo_list_1(id_ref).getPos;
+            end
+            if nargin < 6 || isempty(y_lim)
+                y_lim = [-5 5; -10 10; -10 10];
+            elseif spline_base == 0
+                spline_base = -1;
+            end
+            
+            Core.getLogger.addMonoMessage('\nProcessing gain - solution 0 vs 1\n----------------------------------------');
+
+            for r = setdiff(1 : numel(coo_list_1), id_ref)
+                if isa(coo_list_0, 'Coordinates')
+                    coo0 = coo_list_0(r);
+                else
+                    coo0 = coo_list_0(r).getPos;
+                end
+                if isa(coo_list_1, 'Coordinates')
+                    coo1 = coo_list_1(r);
+                else
+                    coo1 = coo_list_1(r).getPos;
+                end
+                
+                % Extract the baselines
+                [t_comm, idx1, idx2] = intersect(round(coo_ref0.time.getRefTime(coo0.time.first.getMatlabTime)),round(coo0.time.getRefTime(coo0.time.first.getMatlabTime)));
+                t0 = coo0.time.first.getMatlabTime + t_comm/86400;
+                enu_diff0 = Coordinates.cart2local(median(coo_ref0.xyz,1,'omitnan'),coo0.xyz(idx2,:) - coo_ref0.xyz(idx1,:) )*1e3;
+                id_ok = not(any(isnan(enu_diff0), 2)); % discard NaN
+                t0 = t0(id_ok);
+                enu_diff0 = enu_diff0(id_ok,:);
+                
+                [t_comm, idx1, idx2] = intersect(round(coo_ref1.time.getRefTime(coo1.time.first.getMatlabTime)),round(coo1.time.getRefTime(coo1.time.first.getMatlabTime)));
+                t1 = coo1.time.first.getMatlabTime + t_comm/86400;
+                enu_diff1 = Coordinates.cart2local(median(coo_ref1.xyz,1,'omitnan'),coo1.xyz(idx2,:) - coo_ref1.xyz(idx1,:) )*1e3;
+                id_ok = not(any(isnan(enu_diff1), 2)); % discard NaN
+                t1 = t1(id_ok);
+                enu_diff1 = enu_diff1(id_ok,:);
+                
+                % Sync the baselines
+                [t_comm, idx0, idx1] = intersect(round(t0*86400)/86400,round(t1*86400)/86400, 'stable');
+                enu_diff = enu_diff0(idx0,:) - enu_diff1(idx1,:);
+                id_ok = abs(enu_diff - median(enu_diff, 'omitnan')) < outlier_thr;
+                
+                fh = figure; Core_UI.beautifyFig(fh, 'dark'); drawnow
+                % Plot the baseline difference ----------------------------------------
+                subplot(3,1,1);
+                tmp = bsxfun(@minus, enu_diff, [-20 0 20]);
+                plotSep(t_comm, tmp, '.-', 'MarkerSize', 15, 'LineWidth', 2);
+                for c = 1 : 3
+                    std_enu(:,c) = std(enu_diff(id_ok(:,c), c), 'omitnan');
+                end
+                legend(sprintf('East (%.2f mm)', std_enu(1)), sprintf('North (%.2f mm)', std_enu(2)), sprintf('Up (%.2f mm)', std_enu(3)), 'location', 'EastOutside');
+                ylim(y_lim(1,:));
+                xlim(minMax(t_comm));
+                setTimeTicks();
+                ax(1) = gca;
+                ylabel(sprintf('Baseline\ndifference'));
+                grid minor
+                if isempty(coo1.name)
+                    trg_rec_name = sprintf('%d', r);
+                else
+                    trg_rec_name = coo1.name;
+                end
+                if isempty(coo_ref1.name)
+                    ref_rec_name = sprintf('%d', id_ref);
+                else
+                    ref_rec_name = coo_ref1.name;
+                end
+                title(sprintf('Baseline %s - %s\\fontsize{5} \n', trg_rec_name, ref_rec_name), 'FontSize', 16);
+                
+                
+                % Plot the baseline (filtered by spline) of the solution with no MP ---
+                subplot(3,1,2);
+                tmp = enu_diff0(idx0,:) - median(enu_diff0(idx0,:), 'omitnan');
+                tmp0 = enu_diff0 - median(enu_diff0(idx0,:), 'omitnan');
+                splined = zeros(size(tmp));
+                splined0 = zeros(size(tmp0));
+                if spline_base > 0
+                    for c = 1 : 3
+                        ttmp = t_comm(id_ok(:,c));
+                        [filtered, ~, ~, splined(:,c)] = splinerMat(ttmp, tmp(id_ok(:,c),c), spline_base, 1e-8, t_comm);
+                        [~, ~, ~, splined0(:,c)] = splinerMat(ttmp, tmp(id_ok(:,c),c), spline_base, 1e-8, t0);
+                    end
+                end
+                tmp = tmp - splined; % remove splines
+                tmp0 = tmp0 - splined0; % remove splines
+                tmp0 = bsxfun(@minus, tmp0, [-20 0 20]);
+                plotSep(t0, tmp0, '.-', 'MarkerSize', 15, 'LineWidth', 2);
+                
+                for c = 1 : 3
+                    std_enu0(:,c) = std(tmp(id_ok(:,c), c), 'omitnan');
+                end
+                %plotSep(t_comm, splined, '.-', 'MarkerSize', 1, 'LineWidth', 1, 'Color', 'k');
+                legend(sprintf('East (%.2f mm)', std_enu0(1)), sprintf('North (%.2f mm)', std_enu0(2)), sprintf('Up (%.2f mm)', std_enu0(3)), 'location', 'EastOutside');
+                if spline_base ~= 0
+                    ylim(y_lim(2,:));
+                end
+                xlim(minMax(t_comm));
+                setTimeTicks();
+                ax(2) = gca;
+                ylabel(sprintf('Baseline 0\n(reduced)'));
+                grid minor
+                
+                % Plot the baseline (filtered by spline) of the solution with MP ------
+                subplot(3,1,3);
+                tmp = enu_diff1(idx1,:) - median(enu_diff1(idx1,:), 'omitnan');
+                tmp1 = enu_diff1 - median(enu_diff1, 'omitnan');
+                splined = zeros(size(tmp));
+                splined1 = zeros(size(tmp1));
+                if spline_base > 0
+                    for c = 1 : 3
+                        ttmp = t_comm(id_ok(:,c));
+                        [filtered, ~, ~, splined(:,c)] = splinerMat(ttmp, tmp(id_ok(:,c),c), spline_base, 1e-8, t_comm);
+                        [~, ~, ~, splined1(:,c)] = splinerMat(ttmp, tmp(id_ok(:,c),c), spline_base, 1e-8, t1);
+                    end
+                end
+                tmp = tmp - splined; % remove splines
+                tmp1 = tmp1 - splined1; % remove splines
+                tmp1 = bsxfun(@minus, tmp1, [-20 0 20]);
+                plotSep(t1, tmp1, '.-', 'MarkerSize', 15, 'LineWidth', 2);
+                
+                for c = 1 : 3
+                    std_enu1(:,c) = std(tmp(id_ok(:,c), c), 'omitnan');
+                end
+                legend(sprintf('East (%.2f mm)', std_enu1(1)), sprintf('North (%.2f mm)', std_enu1(2)), sprintf('Up (%.2f mm)', std_enu1(3)), 'location', 'EastOutside');
+                if spline_base ~= 0
+                    ylim(y_lim(3,:));
+                end
+                xlim(minMax(t_comm));
+                setTimeTicks();
+                ax(3) = gca;
+                ylabel(sprintf('Baseline 1\n(reduced)'));
+                grid minor
+                
+                Core_UI.beautifyFig(fh, 'dark');
+                Core_UI.addExportMenu(fh);
+                linkaxes(ax, 'x');
+                
+                Core.getLogger.addMonoMessage(sprintf('Baseline %d - %d) %5.2f %% %5.2f %% %5.2f %%', r, id_ref, (100*((std_enu0 - std_enu1) ./ std_enu0))));
+            end
+        end
     end
     
     % =========================================================================
@@ -1291,5 +1742,4 @@ classdef Coordinates < Exportable & handle
             toc
         end
     end
-    
 end

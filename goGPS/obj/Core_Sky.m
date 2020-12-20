@@ -120,7 +120,7 @@ classdef Core_Sky < handle
             is_empty = isempty(this.coord);
         end
         
-        function initSession(this, start_date, stop_date, cc, flag_no_clock)
+        function initSession(this, start_date, stop_date, cc, flag_eph_only)
             % Load and precompute all the celestial parameted needed in a session delimited by an interval of dates
             % SYNTAX:
             %    this.initSession(this, start_date, stop_time)
@@ -131,30 +131,63 @@ classdef Core_Sky < handle
                 start_date = start_date.first();
             end
             if nargin <= 3 || isempty(cc)
-                this.cc = Core.getState.getConstellationCollector;
+                new_cc = Core.getState.getConstellationCollector;
             else
-                this.cc = cc;
+                new_cc = cc;
             end
+            flag_new_cc = ~strcmp(unique(this.cc), unique(new_cc));
+            if flag_new_cc
+                this.clearOrbit;
+            end
+            this.cc = new_cc;
             
-            if nargin <= 4 || isempty(flag_no_clock)
-                flag_no_clock = false;
+            if nargin <= 4 || isempty(flag_eph_only)
+                flag_eph_only = false;
             end
             
             flag_coo_loaded = ~isempty(this.getFirstEpochCoord) && this.getFirstEpochCoord <= start_date && this.getLastEpochCoord >= stop_date;
             flag_time_loaded = ~isempty(this.getFirstEpochClock) && this.getFirstEpochClock <= start_date && this.getLastEpochClock >= stop_date;
             %flag_update_sky = start_date < this.getCoordTime.first || stop_date > this.getCoordTime.last || ...
             %    start_date < this.getClockTime.first || stop_date > this.getClockTime.last;
-            if ~isempty(start_date) && (~flag_coo_loaded || ~flag_time_loaded)
+            if ~isempty(start_date) && (flag_new_cc || (~flag_coo_loaded || ~flag_time_loaded))
                 this.group_delays = zeros(this.cc.getNumSat(),82); % group delay of code measurements (meters) referenced to their constellation reference:
                 this.phase_delays = zeros(this.cc.getNumSat(),82); % group delay of code measurements (meters) referenced to their constellation reference:
                 
                 eph_f_name   = Core.getState.getEphFileName(start_date, stop_date);
-                clock_f_name = Core.getState.getClkFileName(start_date, stop_date);
-                clock_is_present = true;
-                for i = 1:length(clock_f_name)
-                    clock_is_present = clock_is_present && (exist(clock_f_name{i}, 'file') == 2);
+                if isempty(eph_f_name)
+                    flag_init_nav_files = true;
+                else
+                    [~, file_name, ~] = fileparts(eph_f_name{1});
+                    if isempty(file_name)
+                        flag_init_nav_files = true;
+                    else
+                        flag_init_nav_files = false;
+                    end
                 end
-                clock_in_eph = isempty(setdiff(eph_f_name, clock_f_name)) || ~clock_is_present; %%% condition to be tested in differnet cases
+                
+                if flag_init_nav_files
+                    state = Core.getState();
+                    center_name = state.getCurCenter();
+                    if iscell(center_name)
+                        center_name = center_name{1};
+                    end
+                    fw = File_Wizard;
+                    list_preferred = state.PREFERRED_EPH(fw.rm.getOrbitType(center_name));
+                    state.setPreferredOrbit(list_preferred, center_name);
+                    eph_f_name   = Core.getState.getEphFileName(start_date, stop_date);
+%                    fw.conjureNavFiles(start_date, stop_date);
+                end
+                
+                clock_f_name = Core.getState.getClkFileName(start_date, stop_date);
+                if isempty(clock_f_name)
+                    clock_is_present = false;
+                else
+                    clock_is_present = true;
+                    for i = 1:length(clock_f_name)
+                        clock_is_present = clock_is_present && (exist(clock_f_name{i}, 'file') == 2);
+                    end
+                end
+                clock_in_eph = isempty(setdiff(eph_f_name, clock_f_name)) || ~clock_is_present; %%% condition to be tested in different cases
                 if isempty(this.time_ref_coord) || start_date < this.time_ref_coord
                     this.clearOrbit();
                 else
@@ -172,30 +205,34 @@ classdef Core_Sky < handle
                     for i = 1:length(eph_f_name)
                         gps_time = getFileStTime(eph_f_name{i});
                         end_time = this.getLastEpochCoord();
-                        if true; %isempty(end_time) || isempty(gps_time) || (end_time - gps_time) > -1e-3
+                        % if true %isempty(end_time) || isempty(gps_time) || (end_time - gps_time) > -1e-3
                             this.addSp3(eph_f_name{i}, clock_in_eph);
                             this.coord = this.coord(1 : find(any(this.coord(:,:,1),2), 1, 'last'),:,:);
                             this.clock = this.clock(1 : find(any(this.clock(:,:),2), 1, 'last'),:,:);
-                        end
+                        % end
                         this.coord_type = 0; % center of mass
                         this.poly_type = 0; % center of mass
                     end
                     
                     % Very simple fill of missing orbits, but if they are bad, data are rejected
                     % in normal conditions orbits have no gaps, but sometimes BNC are not logged
-                    for s = 1 : size(this.coord, 2)
-                        if any(isnan(serialize(this.coord(:,s,:))))
-                            for c = 1 : 3
-                                data = this.coord(:,s,c);                                
-                                id_ok = find(~isnan(data));
-                                if numel(id_ok) > 3
-                                    id_ko = find(isnan(data));
-                                    this.coord(id_ko,s,c) = interp1(id_ok, this.coord(id_ok,s,c), id_ko, 'spline', nan);
-                                end
-                            end
-                        end
-                    end
+                    % this part of code is commented because this "simple" fill will generate
+                    % bad lagrange coefficients, a good interpolation have to pass probably for
+                    % Keplerian parameters to be smoother
+                    % for s = 1 : size(this.coord, 2)
+                    %     if any(isnan(serialize(this.coord(:,s,:))))
+                    %         for c = 1 : 3
+                    %             data = this.coord(:,s,c);                                
+                    %             id_ok = find(~isnan(data));
+                    %             if numel(id_ok) > 3
+                    %                 id_ko = find(isnan(data) & flagExpand(~isnan(data), 10)); % fill for a maximum of 10 epochs
+                    %                 this.coord(id_ko,s,c) = interp1(id_ok, this.coord(id_ok,s,c), id_ko, 'spline', nan);
+                    %             end
+                    %         end
+                    %     end
+                    % end
                 else %% if not sp3 assume is a rinex navigational file
+                    clock_in_eph = true;
                     this.toAPC(); % be sure to be in APC before adding new coordinates
                     this.clearPolyCoeff();
                     this.clearSunMoon();
@@ -214,7 +251,7 @@ classdef Core_Sky < handle
                     this.importIono(f_name{1}, central_time);
                 end
                 
-                if not(clock_in_eph) && ~flag_no_clock
+                if not(clock_in_eph) && ~flag_eph_only
                     Core.getLogger.addMarkedMessage('Importing satellite clock files...');
                     for i = 1:length(clock_f_name)
                         [~,name,ext] = fileparts(clock_f_name{i});
@@ -229,34 +266,35 @@ classdef Core_Sky < handle
                     % Very simple fill of missing clocks, but if they are bad, data are rejected
                     % in normal conditions clocks have no gaps, but sometimes BNC are not logged
                     % NOTE CLOCK MUST NOT BE CHANGED -> very dangerous problems may arise
-                    % dclk = Core_Utils.diffAndPred(this.clock);
-                    % dclk = dclk - repmat(nan2zero(median(zero2nan(dclk), 'omitnan')), size(dclk,1), 1);
-                    % this.clock(sum(abs(dclk)*1e10,2) > 10, :) = nan;
-                    % %dclk = dclk - repmat(median(zero2nan(dclk), 2, 'omitnan'), 1, size(dclk,2));
-                    % this.clock = nan2zero(zero2nan(this.clock) - median(zero2nan(this.clock), 2, 'omitnan'));
-                    %for s = 1 : size(this.clock, 2)
-                    %this.clock(:,s) = this.clock(:,s) - cumsum(Core_Utils.diffAndPred(this.clock(:,s)) - movmedian(Core_Utils.diffAndPred(this.clock(:,s)), 3));
-                    % if any(isnan(zero2nan(serialize(this.clock(:,s)))))
-                    %     data = zero2nan(this.clock(:,s));
-                    %     id_ok = find(~isnan(data));
-                    %     if numel(id_ok) > 3
-                    %         id_ko = find(isnan(data));
-                    %         this.clock(id_ko,s) = nan2zero(interp1(id_ok, data(id_ok), id_ko, 'linear', nan));
+                    % This part of code have been commented because it is very difficult to
+                    % fill the clocks in a good way. If no clocks are present => the
+                    % satellite should not be used, but if the clocks are corrected then there
+                    % is the risk to introduce an unhealty satellite causing bad estimations
+                    % 
+                    % for s = 1 : size(this.clock, 2)
+                    %     if any(isnan(zero2nan(serialize(this.clock(:,s)))))
+                    %         data = zero2nan(this.clock(:,s));
+                    %         id_ok = find(~isnan(data));
+                    %         if numel(id_ok) > 3
+                    %             id_ko = find(isnan(data));
+                    %             this.clock(id_ko,s) = nan2zero(interp1(id_ok, data(id_ok), id_ko, 'linear', nan));
+                    %         end
                     %     end
                     % end
-                    %end
                 end
                 
-                % Interp clock
-                this.fillClockGaps(10, 'spline'); % try to save small interval of missing clocks
-                
-                % load erp
-                Core.getLogger.addMarkedMessage('Importing Earth Rotation Parameters');
-                this.importERP(Core.getState.getErpFileName(start_date, stop_date),start_date);
-                
-                % load dcb
-                Core.getLogger.addMarkedMessage('Importing Differential code biases');
-                this.importDCB(Core.getState.getBiasFileName(start_date, stop_date));
+                if not(flag_eph_only)
+                    % Interp clock
+                    this.fillClockGaps(10, 'spline'); % try to save small interval of missing clocks
+                    
+                    % load erp
+                    Core.getLogger.addMarkedMessage('Importing Earth Rotation Parameters');
+                    this.importERP(Core.getState.getErpFileName(start_date, stop_date),start_date);
+                    
+                    % load biases
+                    Core.getLogger.addMarkedMessage('Importing code biases');
+                    this.importBiases(Core.getState.getBiasFileName(start_date, stop_date));
+                end
             end
         end
         
@@ -724,169 +762,173 @@ classdef Core_Sky < handle
             f_sp3 = fopen(filename_SP3,'rt');
             
             if (f_sp3 == -1)
-                Core.getLogger.addWarning(sprintf('No ephemerides have been found at %s', filename_SP3));
+                Core.getLogger.addWarning(sprintf('No ephemerides have been found at %s the file cannot be opened', filename_SP3));
             else
                 fnp = File_Name_Processor;
                 Core.getLogger.addMessage(Core.getLogger.indent(sprintf('Opening file %s for reading', fnp.getFileName(filename_SP3))));
                 
                 txt = fread(f_sp3,'*char')';
-                if txt(1) == ' '
-                    % the first line is corrupted and have spaces at
-                    % the beginning of the line
-                    id_cut = find(txt ~= ' ', 1, 'first');
-                    if ~isempty(id_cut)
-                        txt = txt(id_cut : end);
-                    end
-                end
-                version = txt(2);
-                fclose(f_sp3);
-                
-                % get new line separators
-                nl = regexp(txt, '\n')';
-                if nl(end) <  numel(txt)
-                    nl = [nl; numel(txt)];
-                end
-                lim = [[1; nl(1 : end - 1) + 1] (nl - 1)];
-                lim = [lim lim(:,2) - lim(:,1)];
-                if lim(end,3) < 3
-                    lim(end,:) = [];
-                end
-                % get end pf header
-                % coord  rate
-                coord_rate = cell2mat(textscan(txt(repmat(lim(2,1),1,11) + (26:36)),'%f'));
-                % n epochs
-                n_epochs = cell2mat(textscan(txt(repmat(lim(1,1),1,7) + (32:38)),'%f'));
-                % find first epoch
-                string_time = txt(repmat(lim(1,1),1,28) + (3:30));
-               
-                % import it as a GPS_Time obj
-                sp3_first_ep = GPS_Time(string_time, [], true);
-                if this.coord_rate ~= coord_rate
-                    if empty_file
-                        this.coord_rate = coord_rate;
-                    else
-                        Core.getLogger.addWarning(['Coord rate not match: ' num2str(coord_rate)]);
-                        return
-                    end
-                end
-                if clock_flag
-                    this.clock_rate = coord_rate;
-                end
-                % checking overlapping and same correct syncro
-                sp3_last_ep = sp3_first_ep.getCopy();
-                sp3_last_ep.addSeconds(coord_rate * n_epochs);
-
-                % initialize array size
-                if empty_file
-                    this.time_ref_coord = sp3_first_ep.getCopy();
-                    if clock_flag
-                        this.time_ref_clock = sp3_first_ep.getCopy();
-                    end
-                    this.coord = zeros(n_epochs, this.cc.getNumSat(),3);
-                    if clock_flag
-                        this.clock = zeros(n_epochs, this.cc.getNumSat());
-                    end
+                if isempty(txt)
+                    Core.getLogger.addWarning(sprintf('No ephemerides have been found at "%s" the file is empty', filename_SP3));
                 else
-                    idx_first = (sp3_first_ep - this.time_ref_coord) / this.coord_rate;
-                    idx_last = (sp3_last_ep - this.time_ref_coord) / this.coord_rate;
-                    memb_idx = ismembertol([idx_first idx_last], -1 : (size(this.coord,1)+1) ); % check whether the extend of sp3 file intersect with the current data
-                    c_n_sat = size(this.coord,2);
-                    if memb_idx(1) == true && memb_idx(2) == false
-                        n_new_epochs = idx_last - size(this.coord, 1);
-                        this.coord = cat(1,this.coord,zeros(n_new_epochs,c_n_sat,3));
-                        if clock_flag
-                            this.clock = cat(1,this.clock,zeros(n_new_epochs,c_n_sat));
+                    fclose(f_sp3);
+                    if txt(1) == ' '
+                        % the first line is corrupted and have spaces at
+                        % the beginning of the line
+                        id_cut = find(txt ~= ' ', 1, 'first');
+                        if ~isempty(id_cut)
+                            txt = txt(id_cut : end);
                         end
-                    elseif memb_idx(1) == false && memb_idx(2) == true
+                    end
+                    version = txt(2);
+                    
+                    % get new line separators
+                    nl = regexp(txt, '\n')';
+                    if nl(end) <  numel(txt)
+                        nl = [nl; numel(txt)];
+                    end
+                    lim = [[1; nl(1 : end - 1) + 1] (nl - 1)];
+                    lim = [lim lim(:,2) - lim(:,1)];
+                    if lim(end,3) < 3
+                        lim(end,:) = [];
+                    end
+                    % get end pf header
+                    % coord  rate
+                    coord_rate = cell2mat(textscan(txt(repmat(lim(2,1),1,11) + (26:36)),'%f'));
+                    % n epochs
+                    n_epochs = cell2mat(textscan(txt(repmat(lim(1,1),1,7) + (32:38)),'%f'));
+                    % find first epoch
+                    string_time = txt(repmat(lim(1,1),1,28) + (3:30));
+                    
+                    % import it as a GPS_Time obj
+                    sp3_first_ep = GPS_Time(string_time, [], true);
+                    if this.coord_rate ~= coord_rate
+                        if empty_file
+                            this.coord_rate = coord_rate;
+                        else
+                            Core.getLogger.addWarning(['Coord rate not match: ' num2str(coord_rate)]);
+                            return
+                        end
+                    end
+                    if clock_flag
+                        this.clock_rate = coord_rate;
+                    end
+                    % checking overlapping and same correct syncro
+                    sp3_last_ep = sp3_first_ep.getCopy();
+                    sp3_last_ep.addSeconds(coord_rate * n_epochs);
+                    
+                    % initialize array size
+                    if empty_file
                         this.time_ref_coord = sp3_first_ep.getCopy();
                         if clock_flag
                             this.time_ref_clock = sp3_first_ep.getCopy();
                         end
-                        n_new_epochs = -idx_first;
-                        this.coord = cat(1,zeros(n_new_epochs,c_n_sat,3),this.coord);
+                        this.coord = zeros(n_epochs, this.cc.getNumSat(),3);
                         if clock_flag
-                            this.clock = cat(1,zeros(n_new_epochs,c_n_sat),this.clock);
+                            this.clock = zeros(n_epochs, this.cc.getNumSat());
                         end
-                    elseif idx_first > 0 && (memb_idx(1) == false && memb_idx(2) == false)
-                        % if there is a space between last coordinates and the new set
-                        n_new_epochs = idx_last - size(this.coord, 1);
-                        this.coord = cat(1,this.coord, zeros(n_new_epochs,c_n_sat,3));
-                        if clock_flag
-                            this.clock = cat(1,this.clock,zeros(n_new_epochs,c_n_sat));
+                    else
+                        idx_first = (sp3_first_ep - this.time_ref_coord) / this.coord_rate;
+                        idx_last = (sp3_last_ep - this.time_ref_coord) / this.coord_rate;
+                        memb_idx = ismembertol([idx_first idx_last], -1 : (size(this.coord,1)+1) ); % check whether the extend of sp3 file intersect with the current data
+                        c_n_sat = size(this.coord,2);
+                        if memb_idx(1) == true && memb_idx(2) == false
+                            n_new_epochs = idx_last - size(this.coord, 1);
+                            this.coord = cat(1,this.coord,zeros(n_new_epochs,c_n_sat,3));
+                            if clock_flag
+                                this.clock = cat(1,this.clock,zeros(n_new_epochs,c_n_sat));
+                            end
+                        elseif memb_idx(1) == false && memb_idx(2) == true
+                            this.time_ref_coord = sp3_first_ep.getCopy();
+                            if clock_flag
+                                this.time_ref_clock = sp3_first_ep.getCopy();
+                            end
+                            n_new_epochs = -idx_first;
+                            this.coord = cat(1,zeros(n_new_epochs,c_n_sat,3),this.coord);
+                            if clock_flag
+                                this.clock = cat(1,zeros(n_new_epochs,c_n_sat),this.clock);
+                            end
+                        elseif idx_first > 0 && (memb_idx(1) == false && memb_idx(2) == false)
+                            % if there is a space between last coordinates and the new set
+                            n_new_epochs = idx_last - size(this.coord, 1);
+                            this.coord = cat(1,this.coord, zeros(n_new_epochs,c_n_sat,3));
+                            if clock_flag
+                                this.clock = cat(1,this.clock,zeros(n_new_epochs,c_n_sat));
+                            end
                         end
                     end
-                end
-                %%%% read data
-                %%% read epochs
-                t_line = find(txt(lim(:,1)) == '*');
-                % find the length of the time string (it should of this format: yyyy mm dd HH MM SS.00000000)
-                % but sometimes it has 4 digits for seconds :-/ i.e. igs102664.sp3
-                % or has spaces at the end of the time line esa20341.sp3
-                time_len = length(strtrim(txt((lim(t_line(1),1)+1):lim(t_line(1),2)))) + 1;
-                string_time = txt(repmat(lim(t_line,1),1,time_len) + repmat(2 + (1:time_len), length(t_line), 1));
-                %string_time = [string_time repmat(' ',size(string_time,1),1)];
-                % import it as a GPS_Time obj
-                sp3_times = GPS_Time.fromString(string_time');
-
-                % Get active constellations
-                % parse only these
-                sys_c_list = this.cc.getActiveSysChar;
-                % keep only valid lines
-                lim = lim(txt(lim(:,1)) == 'P' | txt(lim(:,1)) == '*', :);
-                
-                % Analyze data line and keep only the one with active satellites
-                d_line = find(txt(lim(:,1)) == 'P')';                
-                sat_sys_c = txt(lim(d_line,1) + 1);
-                sat_sys_c(sat_sys_c == ' ') = 'G'; % standard "a" considers only GPS and no char G is written to specify the constellation
-                % keep only data lines with satellites that I want to load
-                id_ko = regexp(sat_sys_c, ['[^' sys_c_list ']']);
-                lim(d_line(id_ko), :) = [];
-                n_spe = diff(find([txt(lim(:, 1)) '*'] == '*')) - 1; % number of satellites per epoch
-                t_line = find(txt(lim(:, 1)) == '*');
-                d_line = find(txt(lim(:,1)) == 'P')';
-                      
-                % Parse data considering 4 columns of valid observations with full size of 14chars (x4)
-                % All should be float values
-                data = reshape(sscanf(txt(bsxfun(@plus, repmat(lim(d_line,1) + 3, 1, 1 + 14*4), 1:(1 + 14*4)))', '%f'), 4, numel(d_line))';
-                
-                % character of sys_c for each line of the SP3
-                sys_c = txt(lim(d_line,1) + 1);
-                % list of epochs in this.coord to be written
-                c_ep_idx = round((sp3_times - this.time_ref_coord) / this.coord_rate) +1; %current epoch index
-                % prn of each line of data
-                sat_prn = uint8(txt(lim(d_line,1) + 2) - 48) * 10 + uint8(txt(lim(d_line,1) + 3) - 48);
-                
-                % id in this.coord containing the index to insert
-                id_ep = zeros(size(d_line,1),1);  
-                id_ep(1) = 1;
-                id_next_ep = cumsum(n_spe(1 : end-1)) + 1; % id of the next epoch
-                for i = 1 : numel(id_next_ep)
-                    id_ep(id_next_ep(i)) = id_ep(id_next_ep(i)) + 1;
-                end
-                id_ep = cumsum(id_ep);
-
-                % go_id of each line of data
-                go_id = this.cc.getIndex(sys_c, double(sat_prn))';
-                
-                % remove unvalid PRNs
-                id_ko = isnan(go_id);                
-                sat_prn(id_ko) = [];
-                data(id_ko,:) = [];
-                go_id(id_ko) = [];
-                d_line(id_ko) = [];
-                id_ep(id_ko) = [];
-
-                % fill this.coord
-                for col = 1 : 3
-                    id = c_ep_idx(id_ep) + (go_id - 1) * size(this.coord, 1) + (col - 1) * size(this.coord, 1) * size(this.coord, 2);
-                    this.coord(id) = data(:, col) * 1e3;
-                end
-                
-                % fill this.clock
-                if clock_flag
-                    data(:,4) = data(:,4) / 1e6;
-                    data(data(:, 4) > 0.99, 4) = nan; % manual manage of nan (9999)
-                    this.clock(c_ep_idx(id_ep) + (go_id - 1) * size(this.coord, 1)) = data(:, 4);
+                    %%%% read data
+                    %%% read epochs
+                    t_line = find(txt(lim(:,1)) == '*');
+                    % find the length of the time string (it should of this format: yyyy mm dd HH MM SS.00000000)
+                    % but sometimes it has 4 digits for seconds :-/ i.e. igs102664.sp3
+                    % or has spaces at the end of the time line esa20341.sp3
+                    time_len = length(strtrim(txt((lim(t_line(1),1)+1):lim(t_line(1),2)))) + 1;
+                    string_time = txt(repmat(lim(t_line,1),1,time_len) + repmat(2 + (1:time_len), length(t_line), 1));
+                    %string_time = [string_time repmat(' ',size(string_time,1),1)];
+                    % import it as a GPS_Time obj
+                    sp3_times = GPS_Time.fromString(string_time');
+                    
+                    % Get active constellations
+                    % parse only these
+                    sys_c_list = this.cc.getActiveSysChar;
+                    % keep only valid lines
+                    lim = lim(txt(lim(:,1)) == 'P' | txt(lim(:,1)) == '*', :);
+                    
+                    % Analyze data line and keep only the one with active satellites
+                    d_line = find(txt(lim(:,1)) == 'P')';
+                    sat_sys_c = txt(lim(d_line,1) + 1);
+                    sat_sys_c(sat_sys_c == ' ') = 'G'; % standard "a" considers only GPS and no char G is written to specify the constellation
+                    % keep only data lines with satellites that I want to load
+                    id_ko = regexp(sat_sys_c, ['[^' sys_c_list ']']);
+                    lim(d_line(id_ko), :) = [];
+                    n_spe = diff(find([txt(lim(:, 1)) '*'] == '*')) - 1; % number of satellites per epoch
+                    t_line = find(txt(lim(:, 1)) == '*');
+                    d_line = find(txt(lim(:,1)) == 'P')';
+                    
+                    % Parse data considering 4 columns of valid observations with full size of 14chars (x4)
+                    % All should be float values
+                    data = reshape(sscanf(txt(bsxfun(@plus, repmat(lim(d_line,1) + 3, 1, 1 + 14*4), 1:(1 + 14*4)))', '%f'), 4, numel(d_line))';
+                    
+                    % character of sys_c for each line of the SP3
+                    sys_c = txt(lim(d_line,1) + 1);
+                    % list of epochs in this.coord to be written
+                    c_ep_idx = round((sp3_times - this.time_ref_coord) / this.coord_rate) +1; %current epoch index
+                    % prn of each line of data
+                    sat_prn = uint8(txt(lim(d_line,1) + 2) - 48) * 10 + uint8(txt(lim(d_line,1) + 3) - 48);
+                    
+                    % id in this.coord containing the index to insert
+                    id_ep = zeros(size(d_line,1),1);
+                    id_ep(1) = 1;
+                    id_next_ep = cumsum(n_spe(1 : end-1)) + 1; % id of the next epoch
+                    for i = 1 : numel(id_next_ep)
+                        id_ep(id_next_ep(i)) = id_ep(id_next_ep(i)) + 1;
+                    end
+                    id_ep = cumsum(id_ep);
+                    
+                    % go_id of each line of data
+                    go_id = this.cc.getIndex(sys_c, double(sat_prn))';
+                    
+                    % remove unvalid PRNs
+                    id_ko = isnan(go_id);
+                    sat_prn(id_ko) = [];
+                    data(id_ko,:) = [];
+                    go_id(id_ko) = [];
+                    d_line(id_ko) = [];
+                    id_ep(id_ko) = [];
+                    
+                    % fill this.coord
+                    for col = 1 : 3
+                        id = c_ep_idx(id_ep) + (go_id - 1) * size(this.coord, 1) + (col - 1) * size(this.coord, 1) * size(this.coord, 2);
+                        this.coord(id) = data(:, col) * 1e3;
+                    end
+                    
+                    % fill this.clock
+                    if clock_flag
+                        data(:,4) = data(:,4) / 1e6;
+                        data(data(:, 4) > 0.99, 4) = nan; % manual manage of nan (9999)
+                        this.clock(c_ep_idx(id_ep) + (go_id - 1) * size(this.coord, 1)) = data(:, 4);
+                    end
                 end
             end
             this.coord = zero2nan(this.coord);  % <--- nan is slow for the computation of the polynomial coefficents
@@ -1007,7 +1049,7 @@ classdef Core_Sky < handle
                 eoh = strfind(txt,'END OF HEADER');
                 eoh = find(lim(:,1) > eoh);
                 eoh = eoh(1) - 1;
-                if strcmp(fname(1:3),'grg') % if cnes orbit loas wsb values
+                if strcmp(fname(1:3),'grg') % if cnes orbit load wsb values
                     wl_line = txt(lim(1:eoh,1)) == 'W' & txt(lim(1:eoh,1)+1) == 'L'& txt(lim(1:eoh,1)+60) == 'C' & txt(lim(1:eoh,1)+61) == 'O' & txt(lim(1:eoh,1)+62) == 'M';
                     wsb_date = GPS_Time(cell2mat(textscan(txt(lim(find(wl_line,1,'first'),1) + [8:33]),'%f %f %f %f %f %f')));
                     wsb_prn = sscanf(txt(bsxfun(@plus, repmat(lim(wl_line, 1),1,3), 4:6))',' %f ');
@@ -1287,327 +1329,106 @@ classdef Core_Sky < handle
             erp.m2 = -(erp.Ypole*1e-6 - erp.meanYpole*1e-3);
         end
         
-        function importDCB(this,fname)
-            if nargin < 2
-                dcb_name = Core.getState.getDcbFile();
-                if iscell(dcb_name)
-                    dcb_name = dcb_name{1};
-                end
-                if ~isempty(dcb_name)
-                    if instr(dcb_name,'CAS')
-                        this.importSinexDCB();
-                    else
-                        this.importCODEDCB();
-                    end
-                end
-            else
+        function importBiases(this,fname)
+            if not(isempty(fname))
                 this.importSinexBias(fname{1});
             end
         end
         
-        function importCODEDCB(this)
-            state = Core.getCurrentSettings();
-            
-            [dcb] = load_dcb(Core.getState.getDcbDir(), double(this.time_ref_coord.getGpsWeek), this.time_ref_coord.getGpsTime, true, state.getCC);
-            %%% assume that CODE dcb contains only GPS and GLONASS
-            %GPS C1W - C2W
-            idx_w1 =  this.getGroupDelayIdx('GC1W');
-            idx_w2 =  this.getGroupDelayIdx('GC2W');
-            p1p2 = dcb.P1P2.value(dcb.P1P2.sys == 'G');
-            iono_free = this.cc.getGPS.getIonoFree();
-            this.group_delays(dcb.P1P2.prn(dcb.P1P2.sys == 'G') , idx_w1) = iono_free.alpha2 *p1p2*Core_Utils.V_LIGHT*1e-9;
-            this.group_delays(dcb.P1P2.prn(dcb.P1P2.sys == 'G') , idx_w2) = iono_free.alpha1 *p1p2*Core_Utils.V_LIGHT*1e-9;
-            % GPS C1W - C1C
-            idx_w1 =  this.getGroupDelayIdx('GC1C');
-            idx_w2 =  this.getGroupDelayIdx('GC2D');
-            p1c1 = nan(this.cc.getGPS.N_SAT,1);
-            p1c1(dcb.P1C1.sys == 'G') = dcb.P1C1.value(dcb.P1C1.sys == 'G');
-            prns = dcb.P1C1.prn(dcb.P1P2.sys == 'G');
-            this.group_delays(prns(prns~=0) , idx_w1) = (iono_free.alpha2 *p1p2(prns~=0) + p1c1(prns~=0))*Core_Utils.V_LIGHT*1e-9;
-            this.group_delays(prns(prns~=0) , idx_w2) = (iono_free.alpha1 *p1p2(prns~=0) + p1c1(prns~=0))*Core_Utils.V_LIGHT*1e-9; %semi codeless tracking
-            %GLONASS C1P - C2P
-            idx_w1 =  this.getGroupDelayIdx('RC1P');
-            idx_w2 =  this.getGroupDelayIdx('RC2P');
-            p1p2 = dcb.P1P2.value(dcb.P1P2.sys == 'R');
-            iono_free = this.cc.getGLONASS.getIonoFree();
-            this.group_delays(dcb.P1P2.prn(dcb.P1P2.sys == 'R') , idx_w1) = (iono_free.alpha2 *p1p2)*Core_Utils.V_LIGHT*1e-9;
-            this.group_delays(dcb.P1P2.prn(dcb.P1P2.sys == 'R') , idx_w2) = (iono_free.alpha1 *p1p2)*Core_Utils.V_LIGHT*1e-9;
-        end
-        
-        
         function importSinexBias(this,file_name)
-             fid = fopen(file_name,'rt');
-                if fid == -1
-                    Core.getLogger.addWarning(sprintf('Core_Sky: File %s not found', file_name));
-                    return
-                end
-                Core.getLogger.addMessage(Core.getLogger.indent(sprintf('Opening file %s for reading', file_name)));
-                txt = fread(fid,'*char')';
-                fclose(fid);
-                
-                % get new line separators
-                nl = regexp(txt, '\n')';
-                if nl(end) <  numel(txt)
-                    nl = [nl; numel(txt)];
-                end
-                lim = [[1; nl(1 : end - 1) + 1] (nl - 1)];
-                lim = [lim lim(:,2) - lim(:,1)];
-                if lim(end,3) < 3
-                    lim(end,:) = [];
-                end
-                
-                % get end of header
-                eoh = strfind(txt,'*BIAS SVN_ PRN ');
-                eoh = find(lim(:,1) > eoh(1));
-                
-                eoh = eoh(1) - 1;
-                head_line = txt(lim(eoh,1):lim(eoh,2));
-                svn_idx = strfind(head_line,'PRN') - 1;
-                c1_idx = strfind(head_line,'OBS1') -1 ;
-                val_idx = strfind(head_line,'__ESTIMATED_VALUE____') - 1;
-                std_idx = strfind(head_line,'_STD_DEV___') - 1;
-                std_idx = std_idx(1);
-                % removing header lines from lim
-                lim(1:eoh, :) = [];
-                
-                % removing last two lines (check if it is a standard) from lim
-                lim((end-1):end, :) = [];
-                
-                % removing non satellites related lines from lim
-                sta_lin = txt(lim(:,1)+13) > 57 | txt(lim(:,1)+13) < 48; % Satellites have numeric PRNs
-                lim(sta_lin,:) = [];
-                
-                % TODO -> remove dcb of epoch different from the current one
-                % find dcb names presents
-                fl = lim(:,1);
-                
-                tmp = [txt(fl+svn_idx)' txt(fl+svn_idx+1)' txt(fl+svn_idx+2)' txt(fl+c1_idx)' txt(fl+c1_idx+1)' txt(fl+c1_idx+2)'];
-                idx = repmat(fl+val_idx,1,20) + repmat([0:19],length(fl),1);
-                dcb = sscanf(txt(idx)','%f');
-                idx = repmat(fl+std_idx,1,11) + repmat([0:10],length(fl),1);
-                dcb_std = sscanf(txt(idx)','%f');
-                % between C2C C2W the std are 0 -> unestimated
-                % as a temporary solution substitute all the zero stds with the mean of all the read stds (excluding zeros)
-                bad_ant_id = []; % list of missing antennas in the DCB file
-                dcb_std(dcb_std == 0) = mean(dcb_std(dcb_std ~= 0));
-                ref_dcb_name_old = '';
-                bad_sat_str = '';
-                for s = 1 : this.cc.getNumSat()
-                    sys = this.cc.system(s);
-                    prn = this.cc.prn(s);
-                    ant_id = this.cc.getAntennaId(s);
-                    sat_idx = this.prnName2Num(tmp(:,1:3)) == this.prnName2Num(ant_id);
-                    if sum(sat_idx) == 0
-                        bad_ant_id = [bad_ant_id; ant_id];
-                    else
-                        sat_dcb_name = tmp(sat_idx,4:end);
-                        sat_dcb = dcb(sat_idx);
-                        sat_dcb_std = dcb_std(sat_idx);
-                        %check if there is the reference dcb in the one
-                        %provided by the external source
-                        for b = 1 : size(sat_dcb_name,1)
-                            dcb_col   = strLineMatch(this.group_delays_flags,[sys 'C' sat_dcb_name(b,2:3)]);
-                            if sat_dcb_name(b,1) == 'C'
-                                this.group_delays(s, dcb_col) =  sat_dcb(b) * Core_Utils.V_LIGHT * 1e-9;
-                            else
-                                this.phase_delays(s, dcb_col) =  sat_dcb(b) * Core_Utils.V_LIGHT * 1e-9;
-                            end
-                        end
-                      
-                    end
-                end
-                if ~isempty(bad_sat_str)
-                    Core.getLogger.addWarning(sprintf('One or more DCB are missing in "%s":\n%s\nthe bias will be eliminated only using iono-free combination', File_Name_Processor.getFileName(file_name), bad_sat_str));
-                end
-                if ~isempty(bad_ant_id)
-                    str = sprintf(', %c%c%c', bad_ant_id');
-                    if size(bad_ant_id, 1) > 1
-                        Core.getLogger.addWarning(sprintf('Satellites %s not found in the DCB file', str(3 : end)));
-                    else
-                        Core.getLogger.addWarning(sprintf('Satellites %s not found in the DCB file', str(3 : end)));
-                    end
-                end
-        end
-        
-        function importSinexDCB(this)
-            %DESCRIPTION: import dcb in sinex format
-            % IMPORTANT WARNING: considering only daily dcb, some
-            % assumpotion on the structure of the file are maded, based on
-            % CAS MGEX DCB files
+            fid = fopen(file_name,'rt');
+            if fid == -1
+                Core.getLogger.addWarning(sprintf('Core_Sky: File %s not found', file_name));
+                return
+            end
+            Core.getLogger.addMessage(Core.getLogger.indent(sprintf('Opening file %s for reading', file_name)));
+            txt = fread(fid,'*char')';
+            fclose(fid);
             
-            if this.isEmpty()
-                Core.getLogger.addWarning('Sky object is empty, no orbits are loaded\nSkipping DCB import');
-            else
-                % open SINEX dcb file
-                file_name = Core.getState.getDcbFile();
-                % geteting object mean times
-                time_st = this.time_ref_clock.getCopy();
-                time_end = time_st.getCopy();
-                time_st.addSeconds(this.clock_rate * (size(this.clock,1) /2) -1);
-                time_end.addSeconds(this.clock_rate * (size(this.clock,1) /2) +1);
-                fnp = File_Name_Processor();
-                file_name = fnp.dateKeyRepBatch(file_name, time_st, time_end);
-                file_name = file_name{1};
-                
-                if isempty(file_name)
-                    Core.getLogger.addWarning('No dcb file found');
-                    return
-                end
-                fid = fopen(file_name,'rt');
-                if fid == -1
-                    Core.getLogger.addWarning(sprintf('Core_Sky: File %s not found', file_name));
-                    return
-                end
-                Core.getLogger.addMessage(Core.getLogger.indent(sprintf('Opening file %s for reading', file_name)));
-                txt = fread(fid,'*char')';
-                fclose(fid);
-                
-                % get new line separators
-                nl = regexp(txt, '\n')';
-                if nl(end) <  numel(txt)
-                    nl = [nl; numel(txt)];
-                end
-                lim = [[1; nl(1 : end - 1) + 1] (nl - 1)];
-                lim = [lim lim(:,2) - lim(:,1)];
-                if lim(end,3) < 3
-                    lim(end,:) = [];
-                end
-                
-                % get end of header
-                eoh = strfind(txt,'*BIAS SVN_ PRN ');
-                eoh = find(lim(:,1) > eoh);
-                
-                eoh = eoh(1) - 1;
-                head_line = txt(lim(eoh,1):lim(eoh,2));
-                svn_idx = strfind(head_line,'PRN') - 1;
-                c1_idx = strfind(head_line,'OBS1') -1 ;
-                c2_idx = strfind(head_line,'OBS2') -1 ;
-                val_idx = strfind(head_line,'__ESTIMATED_VALUE____') - 1;
-                std_idx = strfind(head_line,'_STD_DEV___') - 1;
-                % removing header lines from lim
-                lim(1:eoh, :) = [];
-                
-                % removing last two lines (check if it is a standard) from lim
-                lim((end-1):end, :) = [];
-                
-                % removing non satellites related lines from lim
-                sta_lin = txt(lim(:,1)+13) > 57 | txt(lim(:,1)+13) < 48; % Satellites have numeric PRNs
-                lim(sta_lin,:) = [];
-                
-                % TODO -> remove dcb of epoch different from the current one
-                % find dcb names presents
-                fl = lim(:,1);
-                
-                tmp = [txt(fl+svn_idx)' txt(fl+svn_idx+1)' txt(fl+svn_idx+2)' txt(fl+c1_idx)' txt(fl+c1_idx+1)' txt(fl+c1_idx+2)' txt(fl+c2_idx)' txt(fl+c2_idx+1)' txt(fl+c2_idx+2)'];
-                idx = repmat(fl+val_idx,1,20) + repmat([0:19],length(fl),1);
-                dcb = sscanf(txt(idx)','%f');
-                idx = repmat(fl+std_idx,1,11) + repmat([0:10],length(fl),1);
-                dcb_std = sscanf(txt(idx)','%f');
-                % between C2C C2W the std are 0 -> unestimated
-                % as a temporary solution substitute all the zero stds with the mean of all the read stds (excluding zeros)
-                bad_ant_id = []; % list of missing antennas in the DCB file
-                dcb_std(dcb_std == 0) = mean(dcb_std(dcb_std ~= 0));
-                ref_dcb_name_old = '';
-                bad_sat_str = '';
-                for s = 1 : this.cc.getNumSat()
-                    sys = this.cc.system(s);
-                    prn = this.cc.prn(s);
-                    ant_id = this.cc.getAntennaId(s);
-                    sat_idx = this.prnName2Num(tmp(:,1:3)) == this.prnName2Num(ant_id);
-                    if sum(sat_idx) == 0
-                        bad_ant_id = [bad_ant_id; ant_id];
-                    else
-                        sat_dcb_name = tmp(sat_idx,4:end);
-                        sat_dcb = dcb(sat_idx);
-                        sat_dcb_std = dcb_std(sat_idx);
-                        ref_dcb_name = this.cc.getRefDCB(s);
-                        %check if there is the reference dcb in the one
-                        %provided by the external source
-                        
-                        
-                        % Set up the desing matrix
-                        sys_gd = this.group_delays_flags(this.group_delays_flags(:,1) == sys,2:4);
-                        n_dcb = size(sat_dcb_name,1);
-                        A = zeros(n_dcb,size(sys_gd,1));
-                        for d = 1 : n_dcb
-                            idx1 = this.prnName2Num(sys_gd)  == this.prnName2Num(sat_dcb_name(d,1:3));
-                            A(d,idx1) =  1;
-                            idx2 = this.prnName2Num(sys_gd)  == this.prnName2Num(sat_dcb_name(d,4:6));
-                            A(d,idx2) = -1;
-                        end
-                        % find not present gd
-                        connected = sum(abs(A)) > 0;
-                        A = A(:,connected);
-                        W = diag(1./sat_dcb_std.^2);
-                        % set the refernce iono-free combination to zero using lagrange multiplier
-                        
-                        if sum(sum(sat_dcb_name == repmat(ref_dcb_name,n_dcb,1),2) == 6) > 0 || sum(sum(sat_dcb_name == repmat([ref_dcb_name(4:6) ref_dcb_name(1:3)],n_dcb,1),2) == 6) > 0
-                            
-                            iono_free = this.cc.getSys(sys).getIonoFree();
-                            if sys == 'E' && (size(A,2)-1) > rank(A) % special case galaile Q and X tracking are not connected
-                                const = zeros(2,size(A,2));
-                                ref_col1 = this.prnName2Num(sys_gd(connected,:))  == this.prnName2Num(ref_dcb_name(1:3));
-                                const(1,ref_col1) = iono_free.alpha1;
-                                ref_col2 = this.prnName2Num(sys_gd(connected,:))  == this.prnName2Num(ref_dcb_name(4:6));
-                                const(1,ref_col2) = - iono_free.alpha2;
-                                ref_col1 = this.prnName2Num(sys_gd(connected,:))  == this.prnName2Num('C1X');
-                                const(2,ref_col1) = iono_free.alpha1;
-                                ref_col2 = this.prnName2Num(sys_gd(connected,:))  == this.prnName2Num('C5X');
-                                const(2,ref_col2) = - iono_free.alpha2;
-                                N = [ A'*W*A  const'; const zeros(2)];
-                                gd = N \ ([A'* W * sat_dcb; zeros(2,1)]);
-                                gd(end-1:end) = []; %taking off lagrange multiplier
-                            else
-                                const = zeros(1,size(A,2));
-                                ref_col1 = this.prnName2Num(sys_gd(connected,:))  == this.prnName2Num(ref_dcb_name(1:3));
-                                const(ref_col1) = iono_free.alpha1;
-                                ref_col2 = this.prnName2Num(sys_gd(connected,:))  == this.prnName2Num(ref_dcb_name(4:6));
-                                const(ref_col2) = - iono_free.alpha2;
-                                N = [ A'*W*A  const'; const 0];
-                                gd = N \ ([A'* W * sat_dcb; 0]);
-                                gd(end) = []; %taking off lagrange multiplier
-                            end
+            % get new line separators
+            nl = regexp(txt, '\n')';
+            if nl(end) <  numel(txt)
+                nl = [nl; numel(txt)];
+            end
+            lim = [[1; nl(1 : end - 1) + 1] (nl - 1)];
+            lim = [lim lim(:,2) - lim(:,1)];
+            if lim(end,3) < 3
+                lim(end,:) = [];
+            end
+            
+            % get end of header
+            eoh = strfind(txt,'*BIAS SVN_ PRN ');
+            eoh = find(lim(:,1) > eoh(1));
+            
+            eoh = eoh(1) - 1;
+            head_line = txt(lim(eoh,1):lim(eoh,2));
+            svn_idx = strfind(head_line,'PRN') - 1;
+            c1_idx = strfind(head_line,'OBS1') -1 ;
+            val_idx = strfind(head_line,'__ESTIMATED_VALUE____') - 1;
+            std_idx = strfind(head_line,'_STD_DEV___') - 1;
+            std_idx = std_idx(1);
+            % removing header lines from lim
+            lim(1:eoh, :) = [];
+            
+            % removing last two lines (check if it is a standard) from lim
+            lim((end-1):end, :) = [];
+            
+            % removing non satellites related lines from lim
+            sta_lin = txt(lim(:,1)+13) > 57 | txt(lim(:,1)+13) < 48; % Satellites have numeric PRNs
+            lim(sta_lin,:) = [];
+            
+            % TODO -> remove bias of epoch different from the current one
+            % find bias names presents
+            fl = lim(:,1);
+            
+            tmp = [txt(fl+svn_idx)' txt(fl+svn_idx+1)' txt(fl+svn_idx+2)' txt(fl+c1_idx)' txt(fl+c1_idx+1)' txt(fl+c1_idx+2)'];
+            idx = repmat(fl+val_idx,1,20) + repmat([0:19],length(fl),1);
+            bias = sscanf(txt(idx)','%f');
+            idx = repmat(fl+std_idx,1,11) + repmat([0:10],length(fl),1);
+            bias_std = sscanf(txt(idx)','%f');
+            % between C2C C2W the std are 0 -> unestimated
+            % as a temporary solution substitute all the zero stds with the mean of all the read stds (excluding zeros)
+            bad_ant_id = []; % list of missing antennas in the bias file
+            bias_std(bias_std == 0) = mean(bias_std(bias_std ~= 0));
+            ref_bias_name_old = '';
+            bad_sat_str = '';
+            for s = 1 : this.cc.getNumSat()
+                sys = this.cc.system(s);
+                prn = this.cc.prn(s);
+                ant_id = this.cc.getAntennaId(s);
+                sat_idx = this.prnName2Num(tmp(:,1:3)) == this.prnName2Num(ant_id);
+                if sum(sat_idx) == 0
+                    bad_ant_id = [bad_ant_id; ant_id];
+                else
+                    sat_bias_name = tmp(sat_idx,4:end);
+                    sat_bias = bias(sat_idx);
+                    try
+                        sat_bias_std = bias_std(sat_idx);
+                    catch ex
+                        % no STD present
+                    end
+                    %check if there is the reference bias in the one
+                    %provided by the external source
+                    for b = 1 : size(sat_bias_name,1)
+                        bias_col   = strLineMatch(this.group_delays_flags,[sys 'C' sat_bias_name(b,2:3)]);
+                        if sat_bias_name(b,1) == 'C'
+                            this.group_delays(s, bias_col) =  sat_bias(b) * Core_Utils.V_LIGHT * 1e-9;
                         else
-                            % Save sat DCB problem string
-                            if isempty(bad_sat_str)
-                                bad_sat_str = sprintf(' - %s for %c%d', ref_dcb_name, sys, prn);
-                            elseif strcmp(ref_dcb_name, ref_dcb_name_old)
-                                bad_sat_str = sprintf('%s, %c%d', bad_sat_str, sys, prn);
-                            else
-                                bad_sat_str = sprintf('%s\n%s for %c%d', bad_sat_str, ref_dcb_name, sys, prn);
-                            end
-                            ref_dcb_name_old = ref_dcb_name;
-                            
-                            % deal with the problem (by hiding warnings)
-                            const = zeros(2,size(A,2));
-                            ref_col1 = this.prnName2Num(sys_gd(connected,:))  == this.prnName2Num(ref_dcb_name(1:3));
-                            const(1,ref_col1) = 1;
-                            ref_col2 = this.prnName2Num(sys_gd(connected,:))  == this.prnName2Num(ref_dcb_name(4:6));
-                            const(2,ref_col2) =1;
-                            N = [ A'*W*A  const'; const zeros(2)];
-                            warning('off'); % Sometimes the system could be singular
-                            gd = N \ ([A'* W * sat_dcb; zeros(2,1)]);
-                            warning('on');
-                            gd(end-1:end) = []; % t aking off lagrange multiplier
-                        end
-                        if sum(isnan(gd)) > 0 || sum(abs(gd) == Inf) > 0
-                            Core.getLogger.addWarning('Invalid set of DCB ignoring them')
-                        else
-                            dcb_col   = strLineMatch(this.group_delays_flags,[repmat(sys,sum(connected),1) sys_gd(connected,:)]);
-                            this.group_delays(prn, dcb_col) = - gd * Core_Utils.V_LIGHT * 1e-9;
+                            this.phase_delays(s, bias_col) =  sat_bias(b) * Core_Utils.V_LIGHT * 1e-9;
                         end
                     end
+                    
                 end
-                if ~isempty(bad_sat_str)
-                    Core.getLogger.addWarning(sprintf('One or more DCB are missing in "%s":\n%s\nthe bias will be eliminated only using iono-free combination', File_Name_Processor.getFileName(file_name), bad_sat_str));
-                end
-                if ~isempty(bad_ant_id)
-                    str = sprintf(', %c%c%c', bad_ant_id');
-                    if size(bad_ant_id, 1) > 1
-                        Core.getLogger.addWarning(sprintf('Satellites %s not found in the DCB file', str(3 : end)));
-                    else
-                        Core.getLogger.addWarning(sprintf('Satellites %s not found in the DCB file', str(3 : end)));
-                    end
+            end
+            if ~isempty(bad_sat_str)
+                Core.getLogger.addWarning(sprintf('One or more biases are missing in "%s":\n%s\nthe bias will be eliminated only using iono-free combination', File_Name_Processor.getFileName(file_name), bad_sat_str));
+            end
+            if ~isempty(bad_ant_id)
+                str = sprintf(', %c%c%c', bad_ant_id');
+                if size(bad_ant_id, 1) > 1
+                    Core.getLogger.addWarning(sprintf('Satellites %s not found in the bias file', str(3 : end)));
+                else
+                    Core.getLogger.addWarning(sprintf('Satellites %s not found in the bias file', str(3 : end)));
                 end
             end
         end
@@ -1779,6 +1600,24 @@ classdef Core_Sky < handle
             end
         end
         
+        function bias = getBias(this, go_id, o_code, gps_time)
+            log = Core.getLogger();
+            cc = Core.getConstellationCollector;
+            if length(this.tracking_bias) >= go_id
+                for b = 1 : length(this.tracking_bias{go_id})
+                    if strcmpi(this.tracking_bias{go_id}{b}.o_code, o_code)
+                        bias = this.tracking_bias{go_id}{b}.getBias(gps_time);
+                        return
+                    end
+                end
+                bias = zeros(gps_time.length,1);
+                log.addWarning(sprintf('No bias correction present for obs %s sat %s',o_code,cc.getAntennaId(go_id)));
+            else
+                bias = nan(gps_time.length,1);
+                log.addWarning(sprintf('No bias correction present for obs %s sat %s',o_code,cc.getAntennaId(go_id)));
+            end
+        end
+        
         function [dts] = clockInterpolate(this, gps_time, sat_go_id)
             % SYNTAX:
             %   [dts] = clockInterpolate(time, sat);
@@ -1835,7 +1674,26 @@ classdef Core_Sky < handle
                 
                 dts_tmp = NaN * ones(size(SP3_c,1), size(SP3_c,2));
                 idx = (sum(nan2zero(SP3_c) ~= 0,2) == 2 .* ~any(SP3_c >= 0.999,2)) > 0;
+                
+                %t = this.getClockTime.getRefTime(round(gps_time.first.getMatlabTime));
+                data = this.clock(:, sat);
+                %[~, ~, ~, dts_tmp] = splinerMat(t(not(isnan(data))), data(not(isnan(data))), 300, 1e-10, gps_time.getRefTime(round(gps_time.first.getMatlabTime)));
                 dts_tmp = (1-u) .* SP3_c(:,1) + (u) .* SP3_c(:,2);
+                % detect anomalous clock jumps ( > 5 cm) if the clack have
+                % a rate of at least 5 minutes
+                if this.getClockTime.getRate >= 300
+                    id_ko = find(abs(diff(data) - median(diff(data))) * Core_Utils.V_LIGHT > 0.05);
+                    for i = 1 : numel(id_ko)
+                        id_ko_tmp = find((p == id_ko(i) & b_neg_idx) | ...
+                            (p == id_ko(i) + 1 & b_pos_idx));
+                        %lid_ok = flagExpand(lid_ko, 5);
+                        if numel(id_ko_tmp) > 3
+                            % This will force to split the system
+                            dts_tmp(id_ko_tmp([2 end-1])) = NaN;
+                        end
+                    end
+                end
+                clear data;
                 dts_tmp(not(idx)) = NaN;
                 
                 %             dt_S_SP3=NaN;
@@ -2133,9 +1991,11 @@ classdef Core_Sky < handle
             t_diff = gps_time.getRefTime(this.time_ref_coord.getMatlabTime);
             
             pid_floor = floor(t_diff / this.coord_rate) + 1 - n_border;
+            % Ignore solution at the border of the polynomial
             pid_floor(pid_floor < 1) = 1;
             pid_floor(pid_floor > size(this.getPolyCoeff, 4)) = size(this.getPolyCoeff, 4);
             pid_ceil = ceil(t_diff / this.coord_rate) + 1 - n_border;
+            % Ignore solution at the border of the polynomial
             pid_ceil(pid_ceil < 1) = 1;
             pid_ceil(pid_ceil > size(this.getPolyCoeff, 4)) = size(this.getPolyCoeff, 4);
             
@@ -2180,6 +2040,7 @@ classdef Core_Sky < handle
                     end
                 end
             end
+            %W_poly(W_poly < 1) = nan; % If the polynomial is not stable, do not compute the orbit
             X_sat = X_sat ./ repmat(W_poly, 1, n_sat, 3);
             V_sat = V_sat ./ repmat(W_poly, 1, n_sat, 3);
             
@@ -2635,6 +2496,71 @@ classdef Core_Sky < handle
     %% STATIC FUNCTIONS used as utilities
     % ==================================================================================================================================================
     methods (Static, Access = public)
+        
+        function [az, el, sat_coo] = getAzEl(coo, time, sat)
+            % Get the azimuth and elevation of a satellite "sat" e.g. G21
+            % 
+            % INPUT
+            %   coo         Coordinates of the ground point
+            %   time        GPS_Time object
+            %   sat         satellite (eg. 'R02') / go_id (e.g. 34)
+            %
+            % OUTPUT
+            %   az, el      azimuth and elevation [deg]
+            %   sat_coo     coordinates of the satellite (Coordinate object)
+            %
+            % SYNTAX
+            %   [az, el, sat_coo] = Core_Sky.getAzEl(coo, gps_time, sat)
+            %
+            % EXAMPLE 
+            %   [az, el] = Core_Sky.getAzEl(Coordinates.fromGeodetic(0,0,0), GPS_Time('2020-10-14 12:14'), 'G22');
+            
+            core = Core.getCurrentCore;
+            old_cc = unique(core.getConstellationCollector.getActiveSysChar);
+            sky = core.sky;
+            if isempty(sky)
+                sky = Core_Sky();
+                core.sky = sky;
+            end
+            cc = sky.cc;
+            if isempty(sat)
+                sat = cc.index;
+            end
+            if isnumeric(sat)
+                sat_name = cc.getSatName(sat);
+            else
+                sat_name = sat;
+            end
+            sys_char_list = unique(sat_name(:,1)');
+            cc.setActive(sys_char_list);
+            if ~strcmp(sys_char_list, old_cc)
+                core.state.cc = cc;
+                fw = File_Wizard();                
+                if (time.last < (GPS_Time.now.addIntSeconds(-86400*14))); 
+                    fw.setCurCenter('code_mgex_aiub', 'final');
+                else
+                    fw.setCurCenter('code_predicted', 'ultra');
+                end
+                fw.conjureNavFiles(time.first, time.last);
+            else
+                core.state.cc = cc;            
+                if isempty(core.state.eph_name)
+                    fw = File_Wizard();
+                    fw.conjureNavFiles(time.first, time.last);
+                end
+            end
+            
+            lim = time.first.getCopy;
+            lim.append(time.last);
+            flag_no_clock = true;
+            core.initSkySession(lim, flag_no_clock);
+            if nargout == 3
+                [az, el, sat_coo] = sky.getAzimuthElevation(coo, time, sat);
+            else
+                [az, el] = sky.getAzimuthElevation(coo, time, sat);
+            end
+            
+        end
         
         function prn_num = prnName2Num(prn_name)
             % Convert a 4 char name into a numeric value (float)
@@ -3553,6 +3479,76 @@ classdef Core_Sky < handle
                     end % end of the inner loop
                 end
             end
+        end
+    end
+    
+    % ==================================================================================================================================================
+    %% SHOW
+    % ==================================================================================================================================================
+    methods
+        function fh = showOrbitsAvailability(this, start_time, stop_time, flag_no_clock)
+            % Basic visualization of the orbits availability for the current
+            % processing time
+            %
+            % SYNTAX:
+            %    this.showOrbitsAvailability(<start_date>, <stop_time>)
+            
+            if nargin == 1
+                start_time = Core.getState.getSessionsStartExt;
+                stop_time = Core.getState.getSessionsStopExt;
+            end
+            
+            if nargin == 2
+                stop_time = start_time.last();
+                start_time = start_time.first();
+            end
+            
+            if nargin <= 3 || isempty(flag_no_clock)
+                flag_no_clock = false;
+            end
+            
+            this.initSession(start_time, stop_time);
+            
+            fh = figure;
+            subplot(16,1,1:6); Core_UI.addBeautifyMenu(fh); drawnow
+            if not(isempty(this.getClockTime))
+                t_clock = this.getClockTime.getMatlabTime;
+                imagesc(t_clock, 1 : size(this.clock, 2), not(isnan(zero2nan(this.clock)))');
+            end
+            xlim([start_time.getMatlabTime, stop_time.getMatlabTime]);
+            setTimeTicks();
+            ax(1) = gca;
+            title(sprintf('Clock availability\\fontsize{5} \n'));
+            ylabel('Satellites');
+
+            subplot(16,1,9:16);
+            cmap = [0.2 0.2 0.2; 1 0.5 0.1; 0.3 1 0.3];
+            coord_validity = not(isnan(zero2nan(this.coord(:,:,1))));
+            if not(isempty(coord_validity))
+                coord_validity = coord_validity + flagShrink(coord_validity, 5);
+                t_clock = this.getCoordTime.getMatlabTime;
+                imagesc(t_clock, 1 : size(this.coord, 2), coord_validity');
+            end
+            xlim([start_time.getMatlabTime, stop_time.getMatlabTime]);
+            colormap(cmap);
+            setTimeTicks();
+            ax(2) = gca;
+            title(sprintf('Coordinates availability\\fontsize{5} \n'));
+            ylabel('Satellites');
+            
+            caxis([0 2]);
+            cb = colorbar('Location', 'SouthOutside');
+            cb.Ticks  = (1:2:5)/3;
+            cb.TickLabels = {'No data', 'Polynomial border', 'Good data'};
+
+            linkaxes(ax);
+            xlim([start_time.getMatlabTime, stop_time.getMatlabTime]);
+            
+            fig_name = sprintf('Orbits_availability');
+            fh.UserData = struct('fig_name', fig_name);
+            Core_UI.beautifyFig(fh);
+            Core_UI.addExportMenu(fh);
+            Core_UI.addBeautifyMenu(fh);
         end
     end
 end

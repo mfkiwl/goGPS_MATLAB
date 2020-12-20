@@ -2,7 +2,7 @@
 % =========================================================================
 %
 % DESCRIPTION
-%   class to manages the about window of goGPSz
+%   class to manage the about window of goGPSz
 %
 % EXAMPLE
 %   ui = GUI_Remote_Resources.getInstance();
@@ -15,7 +15,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
@@ -86,7 +86,7 @@ classdef GUI_Remote_Resources < GUI_Unique_Win
     end
     
     methods (Static, Access = public)
-        function this = getInstance(w_edt)            
+        function this = getInstance(w_edt)
             % Get the persistent instance of the class
             persistent unique_instance_gui_rr__
             

@@ -2,7 +2,7 @@
 % =========================================================================
 %
 % DESCRIPTION
-%   class to manages the inspector window of goGPS
+%   class to manage the inspector window of goGPS
 %
 % EXAMPLE
 %   ui = GUI_Inspector.getInstance();
@@ -15,7 +15,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
@@ -50,7 +50,7 @@ classdef GUI_Inspector < GUI_Unique_Win
         BG_COLOR = Core_UI.DARK_GREY_BG;
         RES_SOURCE = {'Last-session (work-space)', 'Stored outputs'}
         RES_TYPE = {'Pseudo-ranges', 'Carrier Phases'}
-        COO_TYPE = {'Per session coordinates', 'Additional coordinates 1', 'Additional coordinates 2', 'Additional coordinates 3'}
+        COO_TYPE = {'External ".coo" file', 'Per session coordinates', 'Additional coordinates 1', 'Additional coordinates 2', 'Additional coordinates 3'}
     end
     
     %% PROPERTIES GUI
@@ -65,6 +65,7 @@ classdef GUI_Inspector < GUI_Unique_Win
         res_source  % Handle to pop up menu for residuals resources
         res_type    % Handle to pop up menu for residuals type
         coo_type    % Handle to pop up menu for coordinates type
+        bsl_type    % Handle to pop up menu for bsl type (same as coordinates)
         mp_type     % Handle to pop up menu for multipath type
         
         bsl_ref_ids % Handle to edit box for defining reference receivers
@@ -106,6 +107,7 @@ classdef GUI_Inspector < GUI_Unique_Win
                 this.getUniqueWinHandle();
                 this.init();
             end
+            this.bringOnTop;
         end
     end
     
@@ -603,7 +605,7 @@ classdef GUI_Inspector < GUI_Unique_Win
                 'UserData', {'SHOW T@ NSATSS'}, ...
                 'Callback', @this.onInsertCommand);
 
-             but_line = uix.VButtonBox('Parent', out_box, ...
+            but_line = uix.VButtonBox('Parent', out_box, ...
                 'ButtonSize', [340 28] , ...
                 'Spacing', 5, ...
                 'HorizontalAlignment', 'left', ...
@@ -619,6 +621,7 @@ classdef GUI_Inspector < GUI_Unique_Win
                 'BackgroundColor', cmd_bg);
             Core_UI.insertEmpty(h_but);
             [~, this.coo_type] = Core_UI.insertPopUpLight(h_but, 'Coordinates type', this.COO_TYPE, 'coo_type', [], [120 -1]);
+            this.coo_type.Value = 2;
             h_but.Widths = [5 -1];
             v_but.Heights = [4 -1];
                         
@@ -655,14 +658,52 @@ classdef GUI_Inspector < GUI_Unique_Win
                 'Callback', @this.onInsertCommand);
             
             Core_UI.insertEmpty(eg_box);
-
+            
+            % Work-Space
+            % --------------------------------------------------------
+            last_sss_pnl = Core_UI.insertPanelLight(eg_box, 'Misc');
+            workspace_box = uix.VButtonBox('Parent', last_sss_pnl, ...
+                'ButtonSize', [340 28] , ...
+                'Spacing', 0, ...
+                'HorizontalAlignment', 'left', ...
+                'VerticalAlignment', 'top', ...
+                'BackgroundColor', cmd_bg);
+            
+            but_line = uix.HButtonBox('Parent', workspace_box, ...
+                'ButtonSize', [340 28] , ...
+                'Spacing', 5, ...
+                'HorizontalAlignment', 'left', ...
+                'VerticalAlignment', 'top', ...
+                'BackgroundColor', cmd_bg);
+            
+            uicontrol( 'Parent', but_line, ...
+                'String', 'Show Available orbits (all sessions)', ...
+                'TooltipString', 'Available orbits for all the sessions', ...
+                'UserData', {'SHOW ALLORBOK'}, ...
+                'Callback', @this.onInsertCommand);
+            
+            but_line = uix.HButtonBox('Parent', workspace_box, ...
+                'ButtonSize', [340 28] , ...
+                'Spacing', 5, ...
+                'HorizontalAlignment', 'left', ...
+                'VerticalAlignment', 'top', ...
+                'BackgroundColor', cmd_bg);
+            
+            uicontrol( 'Parent', but_line, ...
+                'String', 'Show Available orbits (cur. session)', ...
+                'TooltipString', 'Available orbits for all the sessions', ...
+                'UserData', {'SHOW ORBOK'}, ...
+                'Callback', @this.onInsertCommand);
+            
+            Core_UI.insertEmpty(eg_box);
+            
             % --------------------------------------------------------
             
             %scroller = uix.ScrollingPanel('Parent', eg_box);
             %container = uix.Grid('Parent', scroller, ...
             %    'BackgroundColor', Core_UI.LIGHT_GREY_BG);
 
-            eg_box.Heights = [5, 140, 5, 168, -1];
+            eg_box.Heights = [5, 140, 5, 168, 5, 140, -1];
         end
 
         function insertTabPlots2(this, container)
@@ -766,6 +807,12 @@ classdef GUI_Inspector < GUI_Unique_Win
                 'String', 'ZWD Proc Stats', ...
                 'TooltipString', 'Show ZWD processing status', ...
                 'UserData', {'SHOW T@ ZWD_STAT'}, ...
+                'Callback', @this.onInsertCommand);
+
+            uicontrol( 'Parent', but_line, ...
+                'String', 'ZWD Sync', ...
+                'TooltipString', 'Show multireceiver ZWD (imagesc)', ...
+                'UserData', {'SHOW T@ ZWD_SYNC'}, ...
                 'Callback', @this.onInsertCommand);
 
             but_line = uix.HButtonBox('Parent', out_box, ...
@@ -874,12 +921,33 @@ classdef GUI_Inspector < GUI_Unique_Win
             % Output Multi-rec
             % --------------------------------------------------------
             out_pnl = Core_UI.insertPanelLight(eg_box, 'Base-lines (multi-rec)');
+            
             outmr_box = uix.VButtonBox('Parent', out_pnl, ...
                 'ButtonSize', [340 28] , ...
                 'Spacing', 0, ...
                 'HorizontalAlignment', 'left', ...
                 'VerticalAlignment', 'top', ...
                 'BackgroundColor', cmd_bg);
+            
+            but_line = uix.VButtonBox('Parent', outmr_box, ...
+                'ButtonSize', [340 28] , ...
+                'Spacing', 5, ...
+                'HorizontalAlignment', 'left', ...
+                'VerticalAlignment', 'top', ...
+                'BackgroundColor', cmd_bg);
+            
+            v_but = uix.VBox('Parent', but_line, ...
+                'Padding', 0, ...
+                'BackgroundColor', cmd_bg);
+            Core_UI.insertEmpty(v_but);
+            h_but = uix.HBox('Parent', v_but, ...
+                'Padding', 0, ...
+                'BackgroundColor', cmd_bg);
+            Core_UI.insertEmpty(h_but);
+            [~, this.bsl_type] = Core_UI.insertPopUpLight(h_but, 'Coordinates type', this.COO_TYPE, 'bsl_type', [], [120 -1]);
+            this.bsl_type.Value = 2;
+            h_but.Widths = [5 -1];
+            v_but.Heights = [4 -1];
             
             but_line = uix.HButtonBox('Parent', outmr_box, ...
                 'ButtonSize', [165 28] , ...
@@ -891,7 +959,7 @@ classdef GUI_Inspector < GUI_Unique_Win
             uicontrol( 'Parent', but_line, ...
                 'String', 'Baselines stability ENU', ...
                 'TooltipString', 'Position stability of a receiver vs. a reference', ...
-                'UserData', {'SHOW T@ (REF_REC) ENUBSL'}, ...
+                'UserData', {'SHOW T@ (REF_REC) ENUBSL --ctype=(BTYPE)'}, ...
                 'Callback', @this.onInsertCommand);
 
             but_sub_line = uix.HBox('Parent', but_line, ...
@@ -933,7 +1001,7 @@ classdef GUI_Inspector < GUI_Unique_Win
             uicontrol( 'Parent', but_line, ...
                 'String', 'Baselines Stability Planar Up', ...
                 'TooltipString', 'Position stability of a receiver vs. a reference', ...
-                'UserData', {'SHOW T@ (REF_REC) PUPBSL'}, ...
+                'UserData', {'SHOW T@ (REF_REC) PUPBSL --ctype=(BTYPE)'}, ...
                 'Callback', @this.onInsertCommand);
             
             Core_UI.insertEmpty(eg_box);
@@ -1029,7 +1097,7 @@ classdef GUI_Inspector < GUI_Unique_Win
             %container = uix.Grid('Parent', scroller, ...
             %    'BackgroundColor', Core_UI.LIGHT_GREY_BG);
 
-            eg_box.Heights = [5, 170, 5, 84, 5, 84, 5, -1];
+            eg_box.Heights = [5, 170, 5, 112, 5, 84, 5, -1];
         end
 
         function insertTabMaps(this, container)
@@ -1465,10 +1533,10 @@ classdef GUI_Inspector < GUI_Unique_Win
         function cleaned_cmd_list = checkCommands(this)
             % Check Commands
             cleaned_cmd_list = {};
-            if isempty(char(this.j_cmd.getText))
+            if isempty(strrep(char(this.j_cmd.getText()),'"', ''''))
                 this.j_cmd.setText('% Write here the commands to be executed');
             else
-                cmd_list = textscan(strrep(char(this.j_cmd.getText),'%','#'),'%s','Delimiter', '\n');
+                cmd_list = textscan(strrep(strrep(char(this.j_cmd.getText()),'"', ''''),'%','#'),'%s','Delimiter', '\n');
                 cmd = Core.getCommandInterpreter();
                 if ~isempty(cmd_list)
                     [cleaned_cmd_list, err_list, loop_lev] = cmd.fastCheck(cmd_list{1});
@@ -1488,7 +1556,7 @@ classdef GUI_Inspector < GUI_Unique_Win
                         end
                     end
                     str = strrep(strCell2Str(cmd_list{1}, 10),'#','%');
-                    this.j_cmd.setText(str);
+                    this.j_cmd.setText(strrep(strrep(str, Command_Interpreter.SUB_KEY, ' '), '''', '"'));
                 end
             end
             Core.getLogger.addMarkedMessage('The command validity has been checked');
@@ -1644,7 +1712,7 @@ classdef GUI_Inspector < GUI_Unique_Win
                 
         function onInsertCommand(this, caller, event)
             cmd_list = {};
-            txt = char(this.j_cmd.getText);
+            txt = strrep(char(this.j_cmd.getText()),'"', '''');
             if ~isempty(txt)
                 cmd_list = textscan(strrep(txt, '%', '#'), '%s', 'Delimiter', '\n');
                 cmd_list = cmd_list{1};
@@ -1653,15 +1721,30 @@ classdef GUI_Inspector < GUI_Unique_Win
             new_cmd = strrep(caller.UserData(:), 'T@', this.getTargetList());
             % Manage Coordinate type
             if this.coo_type.Value == 1 % CODE
-                new_cmd = strrep(new_cmd, '(CTYPE)', '0');
+                new_cmd = strrep(new_cmd, '(CTYPE)', '-1');
             elseif this.coo_type.Value == 2 % PR
+                new_cmd = strrep(new_cmd, '(CTYPE)', '0');
+            elseif this.coo_type.Value == 3 % PR
                 new_cmd = strrep(new_cmd, '(CTYPE)', '1');
-            elseif this.coo_type.Value == 3 % PH
-                new_cmd = strrep(new_cmd, '(CTYPE)', '2');
             elseif this.coo_type.Value == 4 % PH
+                new_cmd = strrep(new_cmd, '(CTYPE)', '2');
+            elseif this.coo_type.Value == 5 % PH
                 new_cmd = strrep(new_cmd, '(CTYPE)', '3');
             end
 
+            % Manage Baseline Coordinate type
+            if this.bsl_type.Value == 1 % CODE
+                new_cmd = strrep(new_cmd, '(BTYPE)', '-1');
+            elseif this.bsl_type.Value == 2 % PR
+                new_cmd = strrep(new_cmd, '(BTYPE)', '0');
+            elseif this.bsl_type.Value == 3 % PR
+                new_cmd = strrep(new_cmd, '(BTYPE)', '1');
+            elseif this.bsl_type.Value == 4 % PH
+                new_cmd = strrep(new_cmd, '(BTYPE)', '2');
+            elseif this.bsl_type.Value == 5 % PH
+                new_cmd = strrep(new_cmd, '(BTYPE)', '3');
+            end
+            
             % Manage multipath type
             new_cmd = strrep(new_cmd, '(MPTYPE)', num2str(this.mp_type.Value));
 
@@ -1706,7 +1789,7 @@ classdef GUI_Inspector < GUI_Unique_Win
             end
             cmd_list = [cmd_list; new_cmd];
             str = strrep(strCell2Str(cmd_list, 10),'#','%');
-            this.j_cmd.setText(str);
+            this.j_cmd.setText(strrep(strrep(str, Command_Interpreter.SUB_KEY, ' '), '''', '"'));
             this.checkCommands();
             
             % If immediate execution is required            

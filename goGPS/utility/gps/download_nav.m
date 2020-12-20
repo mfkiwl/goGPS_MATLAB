@@ -21,7 +21,7 @@ function [download_successful, compressed] = download_nav(filename, nav_path)
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
@@ -55,6 +55,7 @@ compressed = 0;
 
 %IGS FTP server URL
 igs_url = 'cddis.gsfc.nasa.gov';
+igs_mirror = 'igs.bkg.bund.de';
 
 %AIUB FTP server URL
 aiub_url = 'ftp.aiub.unibe.ch';
@@ -73,9 +74,13 @@ end
 
 %identify requested file type
 if (strcmp(filename(1:4),'brdc'))
-    url = igs_url;
-    name = 'IGS';
-    path = '/pub/gps/data/daily/';
+    %url = igs_url;
+    %name = 'IGS';
+    %path = '/pub/gps/data/daily/';
+    %subdir = '/brdc/';
+    url = igs_mirror;
+    name = 'BKG IGS mirror';
+    path = '/IGS/BRDC/';
     subdir = '/brdc/';
 elseif (strcmp(filename(1:4),'brdm'))
     url = igs_url;
@@ -95,9 +100,13 @@ fprintf(['FTP connection to the ' name ' server (ftp://' url '). Please wait...'
 
 %connect to the server
 try
-    ftp_server = ftp(url);
+    ftp_server = ftp(url, 'anonymous', 'info@gogps-project.org');
+    warning('off')
+    sf = struct(ftp_server);
+    warning('on')
+    sf.jobject.enterLocalPassiveMode();
 catch
-    fprintf(' connection failed.\n');
+    fprintf(['Could not connect to: ' url ' \n']);
     return
 end
 
@@ -107,26 +116,29 @@ fprintf('\n');
 s = [path num2str(four_digit_year(str2num(filename(end-2:end-1)))) subdir];
 
 cd(ftp_server, '/');
-cd(ftp_server, s);
-
-filename = [filename '.Z'];
-
 try
-    mget(ftp_server,filename,down_dir);
-    if (isunix())
-        system(['uncompress -f ' down_dir filesep filename]);
-    else
-        try
-            [status, result] = system(['".\utility\thirdParty\7z1602-extra\7za.exe" -y x ' '"' down_dir filename '"' ' -o' '"' down_dir '"']); %#ok<ASGLU>
-            delete([down_dir filename]);
-            filename = filename(1:end-2);
-        catch
-            fprintf(['Please decompress the ' filename ' file before trying to use it in goGPS.\n']);
-            compressed = 1;
+    cd(ftp_server, s); % If the folder does not exist go to the catch branch of try
+    
+    filename = [filename '.Z'];
+    
+    try
+        mget(ftp_server,filename,down_dir);
+        if (isunix())
+            system(['uncompress -f ' down_dir filesep filename]);
+        else
+            try
+                [status, result] = system(['".\utility\thirdParty\7z1602-extra\7za.exe" -y x ' '"' down_dir filename '"' ' -o' '"' down_dir '"']); %#ok<ASGLU>
+                delete([down_dir filename]);
+                filename = filename(1:end-2);
+            catch
+                fprintf(['Please decompress the ' filename ' file before trying to use it in goGPS.\n']);
+                compressed = 1;
+            end
         end
+        fprintf(['Downloaded ' filename(1:4) ' file: ' filename '\n']);
+        download_successful = 1;
+    catch
     end
-    fprintf(['Downloaded ' filename(1:4) ' file: ' filename '\n']);
-    download_successful = 1;
 catch
 end
 

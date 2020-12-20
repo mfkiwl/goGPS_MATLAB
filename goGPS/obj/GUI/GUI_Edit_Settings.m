@@ -2,7 +2,7 @@
 % =========================================================================
 %
 % DESCRIPTION
-%   class to manages the user interface of goGPS
+%   class to manage the user interface of goGPS
 %
 % EXAMPLE
 %   ui = GUI_Edit_Settings.getInstance();
@@ -16,7 +16,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2020 Andrea Gatti, Giulio Tagliaferro
@@ -54,6 +54,8 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
         menu        % Handle of the menu
         go_but      % Handle to goButton
         
+        is_gui_ready = false;
+        
         info_g      % Info group
         rec_tbl     % Receiver table
         session_panel % panel of the session definition 
@@ -71,11 +73,11 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
         rpop_up     % Remote resources pup-up
         ropref      % Remote Orbit Preferences
         ripref      % Remote Iono preferences
+        rv2pref     % Remote VMF source preferences
         j_rrini     % ini resources file
         edit_texts  % List of editable text
         edit_texts_array % list of editable text array
         flag_list   % list of all the flags
-        ceckboxes
         
         uip         % User Interface Pointers
     end    
@@ -158,7 +160,8 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
             t0 = tic();
             state = Core.getCurrentSettings;
             this.ok_go = false;
-
+            this.is_gui_ready = false;
+            
             log = Core.getLogger;
 
             % Get the old goGPS window
@@ -182,15 +185,21 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
             if ~isempty(old_win)
                 log.addMarkedMessage('Resetting the old Edit Settings Window');
                 win = old_win;
-                this.go_but.Enable = iif(flag_wait, 'on', 'off');
+                this.go_but.Enable = 'off';
                 
                 if strcmp(this.win.Visible, 'off')
-                    if isunix && not(ismac())
-                        win.Position(1) = round((win.Parent.ScreenSize(3) - win.Position(3)) / 2);
-                        win.Position(2) = round((win.Parent.ScreenSize(4) - win.Position(4)) / 2);
-                    else
-                        win.OuterPosition(1) = round((win.Parent.ScreenSize(3) - win.OuterPosition(3)) / 2);
-                        win.OuterPosition(2) = round((win.Parent.ScreenSize(4) - win.OuterPosition(4)) / 2);
+                    try
+                        msg_pos = GUI_Msg.getPosition;
+                        win.Position(1) = sum(msg_pos([1 3]));
+                        win.Position(2) = sum(msg_pos([2 4])) - win.Position(4);
+                    catch
+                        if isunix && not(ismac())
+                            win.Position(1) = round((win.Parent.ScreenSize(3) - win.Position(3)) / 2);
+                            win.Position(2) = round((win.Parent.ScreenSize(4) - win.Position(4)) / 2);
+                        else
+                            win.OuterPosition(1) = round((win.Parent.ScreenSize(3) - win.OuterPosition(3)) / 2);
+                            win.OuterPosition(2) = round((win.Parent.ScreenSize(4) - win.OuterPosition(4)) / 2);
+                        end
                     end
                 end
             else
@@ -199,7 +208,7 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                 % Main Window ----------------------------------------------------------------------------------------------
 
                 win = figure( 'Name', sprintf('%s @ %s', state.getPrjName, state.getHomeDir), ...
-                    'Visible', 'on', ...
+                    'Visible', 'off', ...
                     'DockControls', 'off', ...
                     'MenuBar', 'none', ...
                     'ToolBar', 'none', ...
@@ -207,24 +216,35 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                     'Renderer', 'opengl', ...
                     'Position', [0 0 1040, 640]);
                 win.UserData.name = this.WIN_NAME;
-                % Center the window
-                if isunix && not(ismac())
-                    win.Position(1) = round((win.Parent.ScreenSize(3) - win.Position(3)) / 2);
-                    win.Position(2) = round((win.Parent.ScreenSize(4) - win.Position(4)) / 2);
-                else
-                    win.OuterPosition(1) = round((win.Parent.ScreenSize(3) - win.OuterPosition(3)) / 2);
-                    win.OuterPosition(2) = round((win.Parent.ScreenSize(4) - win.OuterPosition(4)) / 2);
+                % Center the window on the right of the logger
+                try
+                    msg_pos = GUI_Msg.getPosition;
+                    win.Position(1) = sum(msg_pos([1 3]));
+                    win.Position(2) = sum(msg_pos([2 4])) - win.Position(4);
+                catch
+                    if isunix && not(ismac())
+                        win.Position(1) = round((win.Parent.ScreenSize(3) - win.Position(3)) / 2);
+                        win.Position(2) = round((win.Parent.ScreenSize(4) - win.Position(4)) / 2);
+                    else
+                        win.OuterPosition(1) = round((win.Parent.ScreenSize(3) - win.OuterPosition(3)) / 2);
+                        win.OuterPosition(2) = round((win.Parent.ScreenSize(4) - win.OuterPosition(4)) / 2);
+                    end
                 end
+                win.Visible = 'on';
                 
-                this.win = win;            
+                this.win = win;
 
-                % empty check boxes
-                this.check_boxes = {};
-                this.pop_ups = {};
-                this.edit_texts = {};
-                this.edit_texts_array = {};
-                this.flag_list = {};
-
+                % empty cur_lists
+                this.check_boxes = {}; % List of all the checkboxes
+                this.pop_ups = {};     % List of drop down menu
+                this.rpop_up = {};     % Remote resources pup-up
+                this.ropref = {};      % Remote Orbit Preferences
+                this.ripref = {};      % Remote Iono preferences
+                this.rv2pref = {};     % Remote VMF source preferences
+                this.edit_texts = {};  % List of editable text
+                this.edit_texts_array = {}; % list of editable text array
+                this.flag_list = {};   % list of all the flags
+                
                 try
                     main_bv = uix.VBox('Parent', win, ...
                         'Padding', 5, ...
@@ -235,7 +255,7 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                     open('GUI Layout Toolbox 2.3.4.mltbx');
                     log.newLine();
                     log.addWarning('After installation re-run goGPS');
-                    close(win);
+                    delete(win);
                     return;
                 end
                 top_bh = uix.HBox( 'Parent', main_bv, 'BackgroundColor', Core_UI.DARK_GREY_BG);
@@ -271,11 +291,11 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                     'Padding', 200, ...
                     'BackgroundColor', Core_UI.LIGHT_GREY_BG);
                 this.insertWaitBox(wait_box, 'Building interface...');
-                if isunix && not(ismac)
-                    % On linux I have to repeat this operation or the wait
-                    % box will not be centered
-                    wait_box.Padding = 190;
-                end
+                
+                % On linux I have to repeat this operation or the wait
+                % box will not be centered, let's always do it, it is safer!
+                wait_box.Padding = 190;
+
                 drawnow;
                 delete(wait_box)
                 tab_panel = uix.TabPanel('Parent', panel_g_border, ...
@@ -298,37 +318,29 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                 
                 % Main Panel > tab1 settings
                 this.j_settings = this.insertTabAdvanced(tab_panel);
-
+                
                 % Main Panel > tab2 remote resource ini
-                enable_rri = true;
-                if enable_rri
-                    this.insertTabRemoteResource(tab_panel)
-                end
-               
+                this.insertTabRemoteResource(tab_panel)
+                
                 % Main Panel > tab3 data sources
                 this.insertTabDataSources(tab_panel);            
-
+                
                 % Main Panel > tab4 CRD of the stations
                 this.insertTabRecSpecificParameters(tab_panel);
-
+                
                 % Main Panel > tab5 regularization
                 this.insertTabProcessing(tab_panel);
-
+                
                 % Main Panel > tab6 data sources
                 this.j_cmd = this.insertTabCommands(tab_panel);
-
+                
                 % Main Panel > tab7 processing options
                 this.insertTabOutput(tab_panel);
                 
                 % Tabs settings --------------------------------------------------------------------------------------------
 
-                if enable_rri
-                    tab_panel.TabTitles = {'Advanced', 'Resources', 'Data sources', 'Rec. Info', 'Processing', 'Commands', 'Output'};
-                    tab_panel.Selection = 6;
-                else
-                    tab_panel.TabTitles = {'Settings', 'Data sources', 'Rec. Info', 'Processing', 'Commands', 'Output'};
-                    tab_panel.Selection = 5;
-                end
+                tab_panel.TabTitles = {'Advanced', 'Resources', 'Data sources', 'Rec. Info', 'Processing', 'Commands', 'Output'};
+                tab_panel.Selection = 6;
                 
                 % Botton Panel ---------------------------------------------------------------------------------------------
                 
@@ -384,7 +396,7 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                 this.go_but = uicontrol( 'Parent', bottom_bhr, ...
                     'String', 'go!', ...
                     'FontAngle', 'italic', ...
-                    'Enable', iif(flag_wait, 'on', 'off'), ...
+                    'Enable', 'off', ...
                     'Callback', @this.go, ...
                     'FontWeight', 'bold');
                 
@@ -394,21 +406,29 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                 set(win, 'CloseRequestFcn', @this.close);                
             end
             
-            this.updateUI();
+            
             this.updateRecList();
-                        
+            this.is_gui_ready = true;
+                            
             this.win.Visible = 'on';
+            drawnow;
+            
             % the update of the command list is repeated here because at
             % least on linux the handle to the java container is not valid
             % till visibility is on
             this.updateCmdList();
-
+            
+            % Now that the GUI it is ready I can perform the update of the UI:
+            this.updateUI();
+            
             t_win = toc(t0);
             cm = log.getColorMode();
             log.setColorMode(false);
             log.addStatusOk(sprintf('goGPS GUI initialization completed in %.2f seconds\n', t_win));
             log.setColorMode(cm);
-            this.bringOnTop();            
+            this.bringOnTop();             
+            
+            this.go_but.Enable = iif(flag_wait, 'on', 'off');
         end
         
 
@@ -459,7 +479,8 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
             cmd_bg = Core_UI.LIGHT_GREY_BG;
             tab = uix.HBox('Parent', container, ...
                 'Padding', 5, ...
-                'BackgroundColor', cmd_bg);
+                'BackgroundColor', cmd_bg, ...
+                'Tag', 'CMD');
              
             v_left = uix.VBox('Parent', tab, ...
                 'Padding', 0, ...
@@ -549,7 +570,8 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
             data_selection_bg = Core_UI.LIGHT_GREY_BG;
             tab = uix.VBox('Parent', container, ...
                 'Padding', 5, ...
-                'BackgroundColor', data_selection_bg);
+                'BackgroundColor', data_selection_bg, ...
+                'Tag', 'DS');
             
             % --------------------------------------------------------
             
@@ -725,7 +747,8 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
             tab = uix.VBox('Parent', container, ...
                 'Padding', 5, ...
                 'Spacing', 10, ...
-                'BackgroundColor', color_bg);
+                'BackgroundColor', color_bg, ...
+                'Tag', 'OUT');
             [~, this.edit_texts{end + 1}, this.flag_list{end + 1}] = Core_UI.insertDirBox(tab, 'Out directory', 'out_dir', @this.onEditChange, [25 100 -1 25]);
             [~, this.edit_texts{end+1}] = Core_UI.insertEditBox(tab, 'Output rate of the tropospheric parameters', 'trp_out_rate', 's', @this.onEditChange, [280 100 5 50], color_bg);
             this.edit_texts{end}.TooltipString = 'Insert zero to export the date at the original processing rate';
@@ -770,7 +793,8 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
         function insertTabRecSpecificParameters(this, container)
             tab = uix.VBox('Parent', container, ...
                 'Padding', 5, ...
-                'BackgroundColor', Core_UI.LIGHT_GREY_BG);            
+                'BackgroundColor', Core_UI.LIGHT_GREY_BG, ...
+                'Tag', 'RS');            
             
             %%% Rec
             box = Core_UI.insertPanelLight(tab, 'Station Specific Parameters');
@@ -989,9 +1013,11 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                         name = name(1:min(4, numel(name)));
                         xyz = median(fr.coo.getXYZ,1,'omitnan');
                         coo_found = any(xyz);
-                        time_start = fr.first_epoch.first.toString('yyyy-mm-dd HH:MM:SS');
-                        time_stop = fr.last_epoch.last.toString('yyyy-mm-dd HH:MM:SS');
+                        %time_start = fr.first_epoch.first.toString('yyyy-mm-dd HH:MM:SS');
+                        %time_stop = fr.last_epoch.last.toString('yyyy-mm-dd HH:MM:SS');
                         
+                        time_start = GPS_Time('1980-01-07').toString('yyyy-mm-dd HH:MM:SS');
+                        time_stop = GPS_Time('2080-12-31').toString('yyyy-mm-dd HH:MM:SS');
                         if ~isempty(xyz)
                             if ~isempty(data)
                                 data = [data; {name, xyz(1), xyz(2), xyz(3), Core_Reference_Frame.FLAG_STRING{2}, 50, 50, time_start, time_stop, 0, 0, 0}];
@@ -1187,37 +1213,44 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                 'TabWidth', 110, ...
                 'Padding', 5, ...
                 'BackgroundColor', color_bg, ...
-                'SelectionChangedFcn', @this.onTabChange);
+                'SelectionChangedFcn', @this.onTabChange, ...
+                'Tag', 'PRO');
             
             % Insert tabs
             tab_sat = uix.VBox('Parent', tab_panel, ...
                 'Padding', 2, ...
-                'BackgroundColor', color_bg);
+                'BackgroundColor', color_bg, ...
+                'Tag', 'DSE');
             tab_atm = uix.VBox('Parent', tab_panel, ...
                 'Padding', 2, ...
-                'BackgroundColor', color_bg);
+                'BackgroundColor', color_bg, ...
+                'Tag', 'ATM');
             tab_prepro = uix.VBox('Parent', tab_panel, ...
                 'Padding', 2, ...
-                'BackgroundColor', color_bg);
+                'BackgroundColor', color_bg, ...
+                'Tag', 'PP');
             tab_generic = uix.VBox('Parent', tab_panel, ...
                 'Padding', 2, ...
-                'BackgroundColor', color_bg);
+                'BackgroundColor', color_bg, ...
+                'Tag', 'GO');
             tab_ppp = uix.VBox('Parent', tab_panel, ...
                 'Padding', 2, ...
-                'BackgroundColor', color_bg);
+                'BackgroundColor', color_bg, ...
+                'Tag', 'PPP');
             tab_net = uix.VBox('Parent', tab_panel, ...
                 'Padding', 2, ...
-                'BackgroundColor', color_bg);
+                'BackgroundColor', color_bg, ...
+                'Tag', 'NET');
             tab_panel.TabTitles = {'Data selection', 'Atmosphere', 'Pre-Processing', 'Generic Options', 'PPP Parameters', 'NET Parameters'};
             
-            this.insertDataSelection(tab_sat, color_bg);
-            this.insertTabAtmosphere(tab_atm, color_bg)
+            %this.insertDataSelection(tab_sat, color_bg);
+            %this.insertTabAtmosphere(tab_atm, color_bg);
 
-            this.insertTabPrePro(tab_prepro, color_bg);            
+            %this.insertTabPrePro(tab_prepro, color_bg);            
 
-            this.insertGenericOpt(tab_generic, color_bg);
-            this.insertPPP(tab_ppp, color_bg);
-            this.insertNET(tab_net, color_bg);
+            %this.insertGenericOpt(tab_generic, color_bg);
+            %this.insertPPP(tab_ppp, color_bg);
+            %this.insertNET(tab_net, color_bg);
                         
             this.uip.tab_reg = tab_panel;
         end
@@ -1886,7 +1919,7 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
         end
                 
         function insertTabRemoteResource(this, container)
-            tab = uix.VBox('Parent', container);
+            tab = uix.VBox('Parent', container, 'Tag', 'RR');
             
             state = Core.getCurrentSettings;
             tab_bv = uix.VBox( 'Parent', tab, ...
@@ -1938,20 +1971,20 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
             this.ropref{2} = Core_UI.insertCheckBoxLight(box_opref, 'Rapid', 'orbit2', @this.onResourcesPrefChange);
             this.ropref{3} = Core_UI.insertCheckBoxLight(box_opref, 'Ultra rapid', 'orbit3', @this.onResourcesPrefChange);
             this.ropref{4} = Core_UI.insertCheckBoxLight(box_opref, 'Broadcast', 'orbit4', @this.onResourcesPrefChange);
-            box_opref.Widths = [250 -1 -1 -1 -1];
+            this.ropref{5} = Core_UI.insertCheckBoxLight(box_opref, 'Real-time', 'orbit5', @this.onResourcesPrefChange);
+            box_opref.Widths = [250 -1 -1 -1 -1 -1];
             
             try
-                r_man = Remote_Resource_Manager.getInstance(state.getRemoteSourceFile());
                 [tmp, this.rpop_up{end+1}] = Core_UI.insertPopUpLight(tab_bv, 'Iono Center', r_man.getCenterListExtended(1), 'selected_iono_center', @this.onResourcesPopUpChange, [200 -1]);                
             catch
-                str = sprintf('[!!] Resource file missing:\n"%s"\nnot found\n\ngoGPS may not work properly', state.getRemoteSourceFile);
+                % The exception should be managed in the previous popup insert 'Orbit Center'
             end
             
-            box_ipref = uix.HBox( 'Parent', tab_bv, ...
+            box_v1pref = uix.HBox( 'Parent', tab_bv, ...
                 'Spacing', 5, ...
                 'BackgroundColor', Core_UI.LIGHT_GREY_BG);
             
-            uicontrol('Parent', box_ipref, ...
+            uicontrol('Parent', box_v1pref, ...
                 'Style', 'Text', ...
                 'HorizontalAlignment', 'left', ...
                 'String', 'Center iono type preference', ...
@@ -1959,17 +1992,42 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                 'ForegroundColor', Core_UI.BLACK, ...
                 'FontSize', Core_UI.getFontSize(9));
             
-            this.ripref = {};
-            this.ripref{1} = Core_UI.insertCheckBoxLight(box_ipref, 'Final', 'iono1', @this.onResourcesPrefChange);
-            this.ripref{2} = Core_UI.insertCheckBoxLight(box_ipref, 'Predicted 1 day', 'iono2', @this.onResourcesPrefChange);
-            this.ripref{3} = Core_UI.insertCheckBoxLight(box_ipref, 'Predicted 2 days', 'iono3', @this.onResourcesPrefChange);
-            this.ripref{4} = Core_UI.insertCheckBoxLight(box_ipref, 'Broadcast', 'iono4', @this.onResourcesPrefChange);
-            box_ipref.Widths = [250 -1 -1 -1 -1];
+            this.ripref{1} = Core_UI.insertCheckBoxLight(box_v1pref, 'Final', 'iono1', @this.onResourcesPrefChange);
+            this.ripref{1}.TooltipString = 'Final ionospheric map';
+            this.ripref{2} = Core_UI.insertCheckBoxLight(box_v1pref, 'Rapid', 'iono2', @this.onResourcesPrefChange);
+            this.ripref{2}.TooltipString = 'Rapid ionospheric map';
+            this.ripref{3} = Core_UI.insertCheckBoxLight(box_v1pref, 'P1', 'iono3', @this.onResourcesPrefChange);
+            this.ripref{3}.TooltipString = 'Ionospheric map predicted one day ahead ';
+            this.ripref{4} = Core_UI.insertCheckBoxLight(box_v1pref, 'P2', 'iono4', @this.onResourcesPrefChange);
+            this.ripref{4}.TooltipString = 'Ionospheric map predicted two day ahead ';
+            this.ripref{5} = Core_UI.insertCheckBoxLight(box_v1pref, 'Broadcast', 'iono5', @this.onResourcesPrefChange);
+            this.ripref{5}.TooltipString = 'Klobuchar ionospheric parameters';
+            box_v1pref.Widths = [250 -1 -1 -1 -1 -1];
+                 
+            % vmf source
+            box_v2pref = uix.HBox( 'Parent', tab_bv, ...
+                'Spacing', 5, ...
+                'BackgroundColor', Core_UI.LIGHT_GREY_BG);
+            
+            uicontrol('Parent', box_v2pref, ...
+                'Style', 'Text', ...
+                'HorizontalAlignment', 'left', ...
+                'String', 'VMF source preference', ...
+                'BackgroundColor', Core_UI.LIGHT_GREY_BG, ...
+                'ForegroundColor', Core_UI.BLACK, ...
+                'FontSize', Core_UI.getFontSize(9));
+            
+            this.rv2pref{1} = Core_UI.insertCheckBoxLight(box_v2pref, 'Operational', 'vmfs1', @this.onResourcesPrefChange);
+            this.rv2pref{2} = Core_UI.insertCheckBoxLight(box_v2pref, 'ERA-Interim', 'vmfs2', @this.onResourcesPrefChange);
+            this.rv2pref{3} = Core_UI.insertCheckBoxLight(box_v2pref, 'Forecast', 'vmfs3', @this.onResourcesPrefChange);
+            box_v2pref.Widths = [250 -1 -1 -1 ];
+            
+            
             
             % Resource tree
-            Core_UI.insertEmpty(tab_bv);
             bottom_box = uix.VBox( 'Parent', tab_bv, ...
                 'BackgroundColor', Core_UI.LIGHT_GREY_BG);
+            tab_bv.Heights = [15 2 18 22 18 22 18 18 -1];
             
             rr_box = uix.VBox( 'Parent', bottom_box, ...
                 'BackgroundColor', Core_UI.LIGHT_GREY_BG);
@@ -1986,6 +2044,23 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                 'TooltipString', 'Open the inspector of the resources locations', ...
                 'Callback', @this.openRRI);
             
+            uicontrol( 'Parent', but_line, ...
+                'String', 'Show orbit availability', ...
+                'TooltipString', 'Show orbits and clock that are already on the disk', ...
+                'Callback', @this.showOrbitsAvailability);
+            
+            uicontrol( 'Parent', but_line, ...
+                'String', 'Download orbits now', ...
+                'TooltipString', 'Download orbits and clock if available', ...
+                'Callback', @this.downloadOrbits);
+            
+            if Core.isGReD
+                uicontrol( 'Parent', but_line, ...
+                'String', 'Download GMUs now', ...
+                'TooltipString', 'Download missing or partially downloaded GMU now', ...
+                'Callback', @this.downloadGMUs);
+            end
+            
             rr_box.Heights = [30];
             
             Core_UI.insertEmpty(bottom_box);
@@ -2001,7 +2076,7 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
             dir_box = uix.VBox( 'Parent', bottom_box, ...
                 'Spacing', 5, ...
                 'BackgroundColor', Core_UI.LIGHT_GREY_BG);
-            bottom_box.Heights = [-1 5 28 28*11];
+            bottom_box.Heights = [-1 2 28 28*11];
                          
             [~, this.edit_texts{end + 1}, this.edit_texts{end + 2}, this.flag_list{end + 1}] = Core_UI.insertDirFileBox(dir_box, 'Antex (ATX) filename', 'atx_dir', 'atx_name', @this.onEditChange, [28 130 -3 5 -1 25]);
             [~, this.edit_texts{end + 1}, this.edit_texts{end + 2}, this.flag_list{end + 1}] = Core_UI.insertDirFileBox(dir_box, 'Geoid local path', 'geoid_dir', 'geoid_name', @this.onEditChange, [28 130 -3 5 -1 25]);
@@ -2011,12 +2086,10 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
             [~, this.edit_texts{end + 1}, this.flag_list{end + 1}] = Core_UI.insertDirBox(dir_box, 'ERP local dir', 'erp_dir', @this.onEditChange, [28 130 -1 25]);
             [~, this.edit_texts{end + 1}, this.flag_list{end + 1}] = Core_UI.insertDirBox(dir_box, 'IONO local dir', 'iono_dir', @this.onEditChange, [28 130 -1 25]);
             [~, this.edit_texts{end + 1}, this.flag_list{end + 1}] = Core_UI.insertDirBox(dir_box, 'IGRF local dir', 'igrf_dir', @this.onEditChange, [28 130 -1 25]);
-            [~, this.edit_texts{end + 1}, this.flag_list{end + 1}] = Core_UI.insertDirBox(dir_box, 'DCB local dir', 'dcb_dir', @this.onEditChange, [28 130 -1 25]);
+            [~, this.edit_texts{end + 1}, this.flag_list{end + 1}] = Core_UI.insertDirBox(dir_box, 'Biases local dir', 'bias_dir', @this.onEditChange, [28 130 -1 25]);
             [~, this.edit_texts{end + 1}, this.flag_list{end + 1}] = Core_UI.insertDirBox(dir_box, 'VMF local dir', 'vmf_dir', @this.onEditChange, [28 130 -1 25]);
             [~, this.edit_texts{end + 1}, this.flag_list{end + 1}] = Core_UI.insertDirBox(dir_box, 'ATM local dir', 'atm_load_dir', @this.onEditChange, [28 130 -1 25]);
-
-            
-            tab_bv.Heights = [15 20 15 20 22 18 18 1 -1];
+                         
             this.uip.tab_rr = tab;            
         end
                 
@@ -2165,7 +2238,7 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
         end
         
         function j_ini = insertTabAdvanced(this, container)
-            tab = uix.VBox('Parent', container);
+            tab = uix.VBox('Parent', container, 'Tag', 'ADV');
             
             com_box = Core_UI.insertPanelLight(tab, 'Parallelism');
             [~, this.edit_texts{end+1}, this.flag_list{end + 1}] = Core_UI.insertDirBox(com_box, 'Communication dir', 'com_dir', @this.onEditChange, [25 160 -1 25]);
@@ -2179,7 +2252,9 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
             j_ini = com.mathworks.widgets.SyntaxTextPane;
             codeType = j_ini.M_MIME_TYPE;  % j_settings.contentType='text/m-MATLAB'
             j_ini.setContentType(codeType);
-            str = strrep(strCell2Str(Core.getCurrentSettings.export(), 10),'#','%');
+            % str = strrep(strCell2Str(Core.getCurrentSettings.export(), 10),'#','%');
+            % <= This will be performed at the end of GUI initialization
+            str = 'Loading ini settings...';
             j_ini.setText(str);
             % Create the ScrollPanel containing the widget
             j_scroll_settings = com.mathworks.mwswing.MJScrollPane(j_ini);
@@ -2294,11 +2369,13 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                 state.setSessionStop(sss_stop);
             end
             if status_change
-                this.updateINI();
-                this.updateRecList();
-                this.updateSessionSummary()
-                this.updateSessionGUI();
-                this.checkFlag();
+                if this.is_gui_ready
+                    this.updateINI();
+                    this.updateRecList();
+                    this.updateSessionSummary()
+                    this.updateSessionGUI();
+                    this.checkFlag();
+                end
             end
         end       
         
@@ -2370,6 +2447,26 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                 value = caller.Value;
             end
             Core.getCurrentSettings.setProperty(caller.UserData, value);
+            % Update VMF Resolution Preferences
+            if strcmpi(caller.UserData,'mapping_function')
+                if (caller.Value == Prj_Settings.MF_VMF1 || caller.Value == Prj_Settings.MF_VMF3_1 || caller.Value == Prj_Settings.MF_VMF3_5)
+                    r_man = Remote_Resource_Manager.getInstance();
+                    state = Core.getCurrentSettings();
+                    
+                    % Update VMF Source Preferences
+                    available_orbit = r_man.getVMFSourceType();
+                    flag_preferred_orbit = true(3,1);
+                    for i = 1 : 3
+                        this.rv2pref{i}.Enable = iif(available_orbit(i), 'on', 'off');
+                        flag_preferred_orbit(i) = available_orbit(i) && logical(this.rv2pref{i}.Value);
+                    end
+                    state.setPreferredVMFSource(flag_preferred_orbit)
+                else
+                    for i = 1 : 3
+                        this.rv2pref{i}.Enable = 'off';
+                    end
+                end
+            end
             this.updateINI();
         end
         
@@ -2383,7 +2480,8 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                 
                 % read current center
                 [center_list, center_ss] = r_man.getCenterList();
-                state.setProperty(caller.UserData, center_list{caller.Value});
+                state.setCurCenter(center_list{caller.Value});
+                this.updateUI;
             elseif strcmp(caller.UserData, 'selected_iono_center')
                 % Particular case selected_center is in GUI with full description of the center
                 % Use caller.Value and r_man.getCenterList();
@@ -2400,9 +2498,9 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
             r_man = Remote_Resource_Manager.getInstance();
             
             % Update Iono Preferences
-            available_iono = r_man.getIonoType(state.getRemoteCenter());
-            flag_preferred_iono = true(4,1);
-            for i = 1 : 4
+            available_iono = r_man.getIonoType();
+            flag_preferred_iono = true(numel(this.ripref),1);
+            for i = 1 : numel(this.ripref)
                 this.ripref{i}.Enable = iif(available_iono(i), 'on', 'off');
                 flag_preferred_iono(i) = available_iono(i) && logical(this.ripref{i}.Value);
             end
@@ -2410,8 +2508,8 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
             
             % Update Orbit Preferences
             available_orbit = r_man.getOrbitType(state.getRemoteCenter());
-            flag_preferred_orbit = true(4,1);
-            for i = 1 : 4
+            flag_preferred_orbit = true(5,1);
+            for i = 1 : numel(this.ropref)
                 this.ropref{i}.Enable = iif(available_orbit(i), 'on', 'off');
                 flag_preferred_orbit(i) = available_orbit(i) && logical(this.ropref{i}.Value);
             end
@@ -2427,20 +2525,28 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
             state = Core.getCurrentSettings;
             if strcmp(caller.UserData(1:4), 'iono')
                 % Update Iono Preferences
-                available_iono = r_man.getIonoType(state.getRemoteCenter());
-                flag_preferred_iono = true(4,1);
-                for i = 1 : 4
+                available_iono = r_man.getIonoType();
+                flag_preferred_iono = true(numel(this.ripref),1);
+                for i = 1 : numel(this.ripref)
                     flag_preferred_iono(i) = available_iono(i) && logical(this.ripref{i}.Value);
                 end
                 state.setPreferredIono(flag_preferred_iono)
-            else
+            elseif strcmp(caller.UserData(1:4), 'orbi')
                 % Update Orbit Preferences
                 available_orbit = r_man.getOrbitType(state.getRemoteCenter());
-                flag_preferred_orbit = true(4,1);
-                for i = 1 : 4
+                flag_preferred_orbit = true(5,1);
+                for i = 1 : numel(this.ropref)
                     flag_preferred_orbit(i) = available_orbit(i) && logical(this.ropref{i}.Value);
                 end
                 state.setPreferredOrbit(flag_preferred_orbit)
+            elseif strcmp(caller.UserData(1:4), 'vmfs')
+                % Update Orbit Preferences
+                available_orbit = r_man.getVMFSourceType();
+                flag_preferred_orbit = true(3,1);
+                for i = 1 : numel(this.rv2pref)
+                    flag_preferred_orbit(i) = available_orbit(i) && logical(this.rv2pref{i}.Value);
+                end
+                state.setPreferredVMFSource(flag_preferred_orbit)
             end
                                     
             this.updateINI();
@@ -2481,7 +2587,7 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                 if strcmp(child.Style, 'edit')
                     val = str2num(child.String);
                     if isempty(val)
-                        val =0;
+                        val = 0;
                     end
                     array = [array val];
                 end
@@ -2494,6 +2600,126 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
         
         function openRRI(this, caller, event)
             GUI_Remote_Resources.getInstance(this.win);
+        end
+        
+        function showOrbitsAvailability(this, caller, event)
+            sky = Core.getCoreSky; sky.showOrbitsAvailability;
+        end
+        
+        
+        function downloadOrbits(this, caller, event)
+            fw = File_Wizard;
+            fw.downloadResource('eph',Core.getState.getSessionsStartExt, Core.getState.getSessionsStopExt);
+        end
+        
+        function downloadGMUs(this, caller, event)
+            % Download the GMU here present
+            % This unction is restricter for GReD internally usage
+            core = Core.getCurrentCore;
+            script_name = fullfile('tmp', 'reDownload.sh');
+            if not(exist('tmp', 'dir') == 7)
+                mkdir('tmp')
+            end
+            fid = fopen(script_name ,'wt+');
+            
+            log = core.getLogger;
+            core.updateRinFileList(true, true);
+            if fid > 0
+                str = sprintf('cd ~/Repositories/goget/\n');
+                
+                rin_list = core.rin_list;
+                try
+                    legacy_marker = Daemon_Guard.LEGACY_MARKER;
+                catch
+                    legacy_marker = {'CAC1', 'CAC2', 'CAC3', 'ARV0'};
+                end
+                try
+                    ignore_missing_marker = Daemon_Guard.IGNORE_MARKER;
+                catch
+                        ignore_missing_marker = {...
+                            'ID01', ...
+                            'ID02', ...
+                            'ID03', ...
+                            'ID04', ...
+                            'ID05', ...
+                            'ID06', ...
+                            'ID07', ...
+                            'ID08', ...
+                            'ID09', ...
+                            'ID10', ...
+                            'ID11', ...
+                            'TW01', ...
+                            'TW02', ...
+                            'TW03', ...
+                            'TW04', ...
+                            'TW05', ...
+                            'TW06', ...
+                            'TW06', ...
+                            'GVP1', ...
+                            'GVP2', ...
+                            'GVP3', ...
+                            'GVP4', ...
+                            'GRTR'};
+                end
+                log.addMarkedMessage(sprintf('Searching for missing or partially downloaded files: %s\n', script_name));
+                flag_any = false;
+                for r = 1 : numel(rin_list)
+                    % Search for files with partial content, and try to redownload them using getGMU
+                    id_short = find(mod(round(rin_list(r).last_epoch.getMatlabTime * 24 * 60 - 1), 60) + 1 < 55);
+                    
+                    marker = rin_list(r).marker_name{1};
+                    marker = marker(1:4);
+                    for bad_id = id_short'
+                        file_name = rin_list(r).getFileName(bad_id);
+                        fullrate = (rin_list(r).last_epoch.getEpoch(bad_id) - rin_list(r).first_epoch.getEpoch(bad_id)) / 3600 * 100;
+                        fprintf('%5.1f%%, "%s"\n', fullrate, file_name);
+                        marker = rin_list(r).marker_name{bad_id};
+                        marker = marker(1:4);
+                        cur_time_start = round(24 * rin_list(r).first_epoch.getEpoch(bad_id).getMatlabTime) / 24;
+                        
+                        log.addMessage(log.indent(sprintf(' - %5.1f%%, %s @ %s "%s"\n', fullrate, marker, datestr(cur_time_start, 'yyyy-mm-dd HH:MM'), file_name)));
+                        str = sprintf('%spython3 ./getGMU.py -n 1 -u -m %s %s -d %s\n', str, marker, iif(ismember(marker, legacy_marker), '--legacy', ''), datestr(cur_time_start, 'yyyy-mm-dd -t HH:MM'));
+                        flag_any = true;
+                        %delete(file_name);
+                        %if fullrate > 100
+                        %    r, bad_id
+                        %end
+                    end
+                    
+                    if not(ismember(marker, ignore_missing_marker))
+                        sss_start = round(core.state.getSessionsStartExt.getMatlabTime * 24);
+                        sss_stop = round(core.state.getSessionsStopExt.getMatlabTime * 24);
+                        sss_stop = min(sss_stop, floor(now * 24 - 1/6) - 1/24);
+                        step = 1;
+                        file_start = round(rin_list(r).first_epoch.getMatlabTime * 24 * 6) / 6;
+                        if not(isempty(file_start))
+                            t = sss_start : sss_stop;
+                            t_bad = setdiff(t, file_start) /  24;
+                            for missing_epoch = t_bad
+                                log.addMessage(log.indent(sprintf(' - %5.1f%%, %s @ %s\n', 0, marker, datestr(missing_epoch, 'yyyy-mm-dd HH:MM'))));
+                                str = sprintf('%spython3 ./getGMU.py -n 1 -u -m %s %s -d %s\n', str, marker, iif(ismember(marker, legacy_marker), '--legacy', ''), datestr(missing_epoch, 'yyyy-mm-dd -t HH:MM'));
+                                flag_any = true;
+                            end
+                        end
+                    end
+                end
+                
+                if flag_any
+                    fwrite(fid, str);
+                else
+                    log.addMarkedMessage('Good, it seems there are no missing or partially downloaded files.');
+                end
+                fclose(fid);
+                if flag_any
+                    log.addMarkedMessage(sprintf('Run script: %s\n', script_name));
+                    % fprintf('\n------------------------------------------------------------------------- \n')
+                    % dos(sprintf('cat %s', script_name));
+                    % fprintf('\n------------------------------------------------------------------------- \n')
+                    dos(sprintf('chmod +x %s', script_name));
+                    dos(sprintf('./%s', script_name));
+                end
+                delete(script_name);
+            end
         end
         
         function resetResDir(this, caller, event)
@@ -2509,7 +2735,7 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
             state.erp_dir = '';
             state.iono_dir = '';
             state.igrf_dir = '';
-            state.dcb_dir = '';
+            state.bias_dir = '';
             state.vmf_dir = '';
             state.atm_load_dir = '';
             
@@ -2518,20 +2744,84 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
             this.updateUI();
         end
         
-        function onTabChange(this, caller, event)
-            if event.NewValue == 1
-                state = Core.getCurrentSettings;
-                if ~isempty(this.j_settings)
-                    try
-                        str = strrep(strCell2Str(state.export(), 10),'#','%');
-                        this.j_settings.setText(str);
-                    catch ex
-                        Core.getLogger.addWarning(sprintf('I cannot update j_settings\n%s', ex.message));
+        function onTabChange(this, caller, event)  
+            if this.is_gui_ready
+                % If Advanced tab is activated
+                try
+                    is_adv_tab = strcmp(caller.Children(end + 1 - event.NewValue).Tag, 'ADV');
+                catch
+                    is_adv_tab = false;
+                end
+                
+                % If Processing tab is activated
+                try
+                    pro_tab = caller.Children(end + 1 - event.NewValue);
+                    is_pro_tab = strcmp(pro_tab.Tag, 'PRO');
+                    if ~is_pro_tab
+                        % try to see if the changed tab is a children of pro_tab
+                        pro_tab = pro_tab.Parent;
+                        is_pro_tab = strcmp(pro_tab.Tag, 'PRO');
+                        if is_pro_tab
+                            pro_tab.Selection = event.NewValue;
+                        end
                     end
-                else
-                    % Check is always needed
-                    state.check()
-                    % Core.getLogger.addWarning('Warning invalid config can not updating j_settings');
+                catch
+                    is_pro_tab = false;
+                end
+                
+                if is_adv_tab
+                    if is_adv_tab
+                        state = Core.getCurrentSettings;
+                        if ~isempty(this.j_settings)
+                            try
+                                str = strrep(strCell2Str(state.export(), 10),'#','%');
+                                this.j_settings.setText(str);
+                            catch ex
+                                Core.getLogger.addWarning(sprintf('I cannot update j_settings\n%s', ex.message));
+                            end
+                        else
+                            % Check is always needed
+                            state.check()
+                            % Core.getLogger.addWarning('Warning invalid config can not updating j_settings');
+                        end
+                    end
+                elseif is_pro_tab
+                    tab = pro_tab.Children(end + 1 - pro_tab.Selection);
+                    if isempty(tab.Children)
+                        
+                        color_bg = Core_UI.LIGHT_GREY_BG_NOT_SO_LIGHT;
+                        switch(tab.Tag)
+                            case {'DSE'}
+                                this.insertDataSelection(tab, color_bg);                                
+                                this.updateCCFromState();
+                                this.updateEditFromState();
+                            case {'ATM'}
+                                this.insertTabAtmosphere(tab, color_bg);
+                                this.updatePopUpsState();
+                                this.updateEditFromState();
+                            case {'PP'}
+                                this.insertTabPrePro(tab, color_bg);
+                                this.updateEditFromState();
+                            case {'GO'}
+                                this.insertGenericOpt(tab, color_bg);
+                                this.updatePopUpsState();
+                                this.updateCheckBoxFromState();
+                                this.updateEditFromState();
+                                this.updateEditArraysFromState();
+                            case {'PPP'}
+                                this.insertPPP(tab, color_bg);
+                                this.updatePopUpsState();
+                                this.updateCheckBoxFromState();
+                                this.updateEditFromState();
+                                this.updateEditArraysFromState();
+                            case {'NET'}
+                                this.insertNET(tab, color_bg);
+                                this.updatePopUpsState();
+                                this.updateCheckBoxFromState();
+                                this.updateEditFromState();
+                                this.updateEditArraysFromState();
+                        end
+                    end
                 end
             end
         end
@@ -2544,7 +2834,7 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
         
         function refreshCmdList(this, caller, event)
             persistent cache_txt
-            txt = char(this.j_cmd.getText());
+            txt = strrep(char(this.j_cmd.getText()),'"', '''');
             if isempty(cache_txt) || ~strcmp(cache_txt, txt)
                 cache_txt = txt;
                 if ~isempty(txt)
@@ -2558,9 +2848,9 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
         end
         
         function updateINI(this)
-            if ~isempty(this.win) && isvalid(this.win)
+            if ~isempty(this.win) && isvalid(this.win) && this.is_gui_ready
                 state = Core.getCurrentSettings;
-                this.win.Name = sprintf('%s @ %s', state.getPrjName, state.getHomeDir);                
+                this.win.Name = sprintf('%s @ %s', state.getPrjName, state.getHomeDir);
                 try
                     str = strrep(strCell2Str(state.export(), 10),'#','%');
                     if ~strcmp(str, char(this.j_settings.getText()))
@@ -2579,18 +2869,18 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
         end
         
         function updateCmdList(this)
-            if ~isempty(this.win) && isvalid(this.win)
+            if ~isempty(this.win) && isvalid(this.win) && this.is_gui_ready
                 if this.j_cmd.isValid
                     str = strrep(strCell2Str(Core.getCurrentSettings.exportCmdList(), 10),'#','%');
-                    if ~strcmp(str, char(this.j_cmd.getText()))
-                        this.j_cmd.setText(str);
+                    if ~strcmp(str, strrep(char(this.j_cmd.getText()),'"', ''''))
+                        this.j_cmd.setText(strrep(strrep(str, Command_Interpreter.SUB_KEY, ' '), '''', '"'));
                     end
                 elseif strcmp(this.win.Visible, 'off')
                     this.win.Visible = 'on'; drawnow
                     if this.j_cmd.isValid
                         str = strrep(strCell2Str(Core.getCurrentSettings.exportCmdList(), 10),'#','%');
-                        if ~strcmp(str, char(this.j_cmd.getText()))
-                            this.j_cmd.setText(str);
+                        if ~strcmp(str, strrep(char(this.j_cmd.getText()),'"', ''''))
+                            this.j_cmd.setText(strrep(strrep(str, Command_Interpreter.SUB_KEY, ' '), '''', '"'));
                         end
                     end
                 end
@@ -2702,11 +2992,11 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
             
             % Update Orbit Preferences
             available_orbit = r_man.getOrbitType(cur_center{1});
-            for i = 1 : 4
+            for i = 1 : 5
                 this.ropref{i}.Enable = iif(available_orbit(i), 'on', 'off');
             end
             flag_preferred_orbit = state.getPreferredOrbit();
-            for i = 1 : 4
+            for i = 1 : 5
                 if available_orbit(i)
                     this.ropref{i}.Value = this.ropref{i}.Value | flag_preferred_orbit(i);
                 end
@@ -2734,15 +3024,27 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
             
             % Update Iono Preferences
             available_iono = r_man.getIonoType(cur_center{1});
-            for i = 1 : 4
+            for i = 1 :  numel(this.ripref)
                 this.ripref{i}.Enable = iif(available_iono(i), 'on', 'off');
             end
             flag_preferred_iono = state.getPreferredIono();            
-            for i = 1 : 4
+            for i = 1 :  numel(this.ripref)
                 if available_iono(i)
                     this.ripref{i}.Value = this.ripref{i}.Value | flag_preferred_iono(i);
                 end
             end
+            % Update VMF source Preferences
+            available_vmf = r_man.getVMFSourceType();
+            for i = 1 : 3
+                this.rv2pref{i}.Enable = iif(available_vmf(i), 'on', 'off');
+            end
+            flag_preferred_vmf = state.getPreferredVMFSource();            
+            for i = 1 : 3
+                if available_vmf(i)
+                    this.rv2pref{i}.Value = this.rv2pref{i}.Value | flag_preferred_vmf(i);
+                end
+            end
+            
         end
         
         function onSessionSummaryCheck(this, caller, event)
@@ -2796,13 +3098,19 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
         end
         
         function openInspector(this, caller, event)
-            % Create a new project            
+            % Open goGPS Inspector       
             goInspector;
+        end
+        
+        function openDownloader(this, caller, event)
+            % open goGPS Resources Downloader            
+            GUI_Downloader.getInstance;
+            this.close;
         end
         
         function createNewProject(this, caller, event)
             % Create a new project            
-            new = GUI_New_Project(this);
+            GUI_New_Project(this);
         end
         
         function openGetChalmerString(this, caller, event)
@@ -2848,10 +3156,14 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
             % Load state settings
             
             state = Core.getCurrentSettings;
-            config_dir = state.getHomeDir();
-            if exist([config_dir filesep 'config'], 'dir')
-                config_dir = [config_dir filesep 'config'];
+            [config_dir] = fileparts(which(state.getIniPath));
+            if strcmp(Core.getInstallDir, config_dir) || not(exist(config_dir, 'dir') == 7) 
+                config_dir = state.getHomeDir();
+                if exist([config_dir filesep 'config'], 'dir') == 7
+                    config_dir = [config_dir filesep 'config'];
+                end
             end
+            
             % On MacOS this doesn't work anymore: [file_name, pathname] = uigetfile({'*.ini;','INI configuration file (*.ini)'; '*.mat;','state file goGPS < 0.5 (*.mat)'}, 'Choose file with saved settings', config_dir);
             [file_name, path_name] = uigetfile('*.ini', 'Choose file with saved settings', config_dir);
             
@@ -2890,9 +3202,12 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
         function saveAsState(this, caller, event)
             % Save As state settings
             state = Core.getCurrentSettings;
-            config_dir = state.getHomeDir();
-            if exist([config_dir filesep 'config'], 'dir')
-                config_dir = [config_dir filesep 'config'];
+            [config_dir] = fileparts(which(state.getIniPath));
+            if strcmp(Core.getInstallDir, config_dir) || not(exist(config_dir, 'dir') == 7) 
+                config_dir = state.getHomeDir();
+                if exist([config_dir filesep 'config'], 'dir') == 7
+                    config_dir = [config_dir filesep 'config'];
+                end
             end
             [file_name, path_name] = uiputfile('*.ini','Save your settings', config_dir);
             
@@ -2941,7 +3256,7 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                 
                 core.state.save(Prj_Settings.LAST_SETTINGS);
                 this.ok_go = true;
-                close(this.win);
+                this.close();
             end
         end
         
@@ -2969,8 +3284,8 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
             %
             % SYNTAX:
             %   this.updateRecList
-            persistent last_check
-
+            persistent last_check unique_dir dir_list
+            
             if nargin < 2 || isnan(flag_force)
                 flag_force = false;
             end
@@ -2989,7 +3304,6 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
             state.updateObsFileName;
             n_rec = state.getRecCount;
             rec_path = state.getRecPath;
-            str = '';
             t0 = tic;
             
             % Get the maximum number of session to check
@@ -3002,10 +3316,10 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
             
             % If I need to check a lot of files use as a method to check
             % dir list, otherwise use existent cache
-            persistent unique_dir dir_list 
+            % persistent unique_dir dir_list
             
-            if (tot_rec < 1100) || flag_force
-                % If last check is older than 30 minutes ago force_check                
+            if (tot_rec < 740) || flag_force
+                % If last check is older than 30 minutes ago force_check
                 % if flag_force is passed to the function it means that a check is not requested because cache hould exist
                 % but if the cache does not exist it is better to force its creation
                 if (nargin == 2) && (isempty(last_check) || (now - last_check) > (1800 / 86400))
@@ -3016,6 +3330,7 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                 available_files = [];
                 % Get all the folders in wich the receivers are stored
                 i = 0;
+                dir_path = {};
                 for r = 1 : numel(rec_path)
                     for s = 1 : numel(rec_path{r})
                         i = i + 1;
@@ -3025,8 +3340,8 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                 
                 % Check if the cache is for the same set of folders
                 cur_unique_dir = unique(dir_path);
-                % If the number of files to check is > 370  and the number of folder to scan is less than 150 (scanning folders might be slow)
-                if (max_sss * n_rec > 370)  && (max_sss * n_rec / numel(cur_unique_dir)) > 20
+                % If the number of files to check is > 100  and the number of folder to scan is less than 150 (scanning folders might be slow)
+                if (max_sss * n_rec > 100)  && (max_sss * n_rec / numel(cur_unique_dir)) > 20
                     % back-up cache
                     old_unique_dir = iif(flag_force, cell(0), unique_dir);
                     old_dir_list = iif(flag_force, cell(0), dir_list);
@@ -3046,12 +3361,15 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                     clear cur_unique_dir old_dir_list old_unique_dir;
                     
                     for d = 1 : numel(unique_dir)
-                        available_files = [available_files {dir_list{d}(3:end).name}];
+                        if not(isempty(dir_list{d}))
+                            available_files = [available_files {dir_list{d}(3:end).name}];
+                        end
                     end
                 end
                 
                 % Update rec table
                 this.rec_tbl.Data = cell(1, 4);
+                u = 0;
                 for r = 1 : n_rec
                     log.addMessage(log.indent(sprintf('Checking receiver %d of %d', r, n_rec)));
                     if ~isempty(available_files)
@@ -3077,7 +3395,7 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                         name = '    ';
                     end
                     
-
+                    
                     
                     n_ok = 0; n_ko = 0;
                     if ~isempty(available_files) && (~isempty(tmp_files) || (max_sss * n_rec > 366))
@@ -3106,8 +3424,10 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                     this.rec_tbl.Data{r,3} = n_ok;
                     this.rec_tbl.Data{r,4} = n_ko;
                     % If many files have been checked update now
-                    if n_ok + n_ko > 10
+                    u = u + n_ok + n_ko;
+                    if u > 20
                         drawnow
+                        u = 0;
                     end
                 end
                 
@@ -3133,6 +3453,7 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
         
         function updateSessionSummary(this)
             if ~isempty(this.session_summary.start)
+
                 state = Core.getCurrentSettings;
                 [~,doy_st] = state.sss_date_start.getDOY;
                 week_st =  state.sss_date_start.getGpsWeek;
@@ -3163,6 +3484,7 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
         
         function updateSessionGUI(this)
             % enable disable fields
+            
             ui_tspan = findobj(this.win, 'Tag', 'sss_duration');
             ui_buffer = findobj(this.win, 'Tag', 'sss_buffer');
             ui_smooth_tropo = findobj(this.win, 'Tag', 'sss_smooth');
@@ -3195,6 +3517,9 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
             uimenu(this.menu.goGPS, ...
                 'Label', 'Open Inspector', ...
                 'Callback', @this.openInspector);
+            uimenu(this.menu.goGPS, ...
+                'Label', 'Open Downloader', ...
+                'Callback', @this.openDownloader);
             this.menu.options = uimenu(this.win, 'Label', 'Options');
             uimenu(this.menu.options, ...
                 'Label', 'Set for PPP troposphere estimation', ...

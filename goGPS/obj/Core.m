@@ -17,7 +17,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2020 Andrea Gatti, Giulio Tagliaferro, Eugenio Realini
@@ -48,7 +48,7 @@ classdef Core < handle
     %% PROPERTIES CONSTANTS
     % ==================================================================================================================================================
     properties (Constant)
-        GO_GPS_VERSION = '1.0b7';
+        GO_GPS_VERSION = '1.0b8';
         GUI_MODE = 0; % 0 means text, 1 means GUI, 5 both
     end
 
@@ -91,6 +91,8 @@ classdef Core < handle
         geoid = struct('file', [], 'grid', 0, 'cellsize', 0, 'Xll', 0, 'Yll', 0, 'ncols', 0, 'nrows', 0); % parameters of the reference geoid
         
         gom         % Parallel controller
+        
+        isValid = true; % must be converted into a function
     end
 
     %% PROPERTIES RECEIVERS
@@ -151,41 +153,55 @@ classdef Core < handle
             
             
             persistent unique_instance_core__
-
-            if (nargin == 1) && isa(force_clean, 'Core')
-                unique_instance_core__ = force_clean;
-                this = force_clean;
-                this.is_gred = exist('GReD_Utility', 'class') == 8;
-            else                
-                if nargin < 1 || isempty(force_clean)
-                    force_clean = false;
-                end
-                if nargin < 2 || isempty(skip_init)
-                    skip_init = false;
-                end
-                
-                
-                if isempty(unique_instance_core__)
-                    this = Core();
-                    unique_instance_core__ = this;
-
-                    if ~skip_init
-                        if nargin == 3 && ~isempty(ini) && exist(ini, 'file')
-                            this.init(force_clean, ini);
-                        else
-                            this.init(force_clean);
-                        end
-                    end
+            if nargin == 3 && (isa(ini, 'char') && ~exist(ini, 'file'))
+                log = Logger.getInstance();
+                log.addError(sprintf('Ini file is missing or unreadable: "%s"', ini))
+                this = Core;
+                this.isValid = false;
+            else
+                if (nargin == 1) && isa(force_clean, 'Core')
+                    unique_instance_core__ = force_clean;
+                    this = force_clean;
                     this.is_gred = exist('GReD_Utility', 'class') == 8;
-
                 else
-                    this = unique_instance_core__;
-                    if ~skip_init
-                        if nargin == 3 && ~isempty(ini) && ...
-                            (isa(ini,'Prj_Settings') || exist(ini, 'file'))
-                            this.init(force_clean, ini);
+                    if nargin < 1 || isempty(force_clean)
+                        force_clean = false;
+                    end
+                    if nargin < 2 || isempty(skip_init)
+                        skip_init = false;
+                    end
+                    
+                    
+                    if isempty(unique_instance_core__)
+                        this = Core();
+                        unique_instance_core__ = this;
+                        
+                        if ~skip_init
+                            if nargin == 3 && ~isempty(ini) && (isa(ini, 'Prj_Settings') || exist(ini, 'file'))
+                                this.init(force_clean, ini);
+                            else
+                                this.init(force_clean);
+                            end
                         else
-                            this.init(force_clean);
+                            if nargin == 3 && ~isempty(ini) && (isa(ini, 'Prj_Settings') || exist(ini, 'file'))
+                                this.state = Prj_Settings(ini);
+                            end
+                        end
+                        this.is_gred = exist('GReD_Utility', 'class') == 8;
+                        
+                    else
+                        this = unique_instance_core__;
+                        if ~skip_init
+                            if nargin == 3 && ~isempty(ini) && ...
+                                    (isa(ini,'Prj_Settings') || exist(ini, 'file'))
+                                this.init(force_clean, ini);
+                            else
+                                this.init(force_clean);
+                            end
+                        else
+                            if nargin == 3 && ~isempty(ini) && (isa(ini, 'Prj_Settings') || exist(ini, 'file'))
+                                this.state = Prj_Settings(ini);
+                            end
                         end
                     end
                 end
@@ -228,9 +244,15 @@ classdef Core < handle
                         % geoid grid and parameters
                         core.geoid.file = geoid_file;
                         core.geoid.grid = g.(fn{1});
-                        core.geoid.cellsize = 360 / size(core.geoid.grid, 2);
-                        core.geoid.Xll = -180 + core.geoid.cellsize / 2;
-                        core.geoid.Yll = -90 + core.geoid.cellsize / 2;
+                        if mod(size(core.geoid.grid, 1), 2) == 1 % isodd
+                            core.geoid.cellsize = 360 / (size(core.geoid.grid, 2) - 1);
+                            core.geoid.Xll = -180;
+                            core.geoid.Yll = -90;
+                        else % iseven
+                            core.geoid.cellsize = 360 / size(core.geoid.grid, 2);
+                            core.geoid.Xll = -180 + core.geoid.cellsize / 2;
+                            core.geoid.Yll = -90 + core.geoid.cellsize / 2;
+                        end
                         core.geoid.ncols = size(core.geoid.grid, 2);
                         core.geoid.nrows = size(core.geoid.grid, 1);
                         clear g
@@ -261,7 +283,10 @@ classdef Core < handle
             
             if isempty(core.geoid)
                 core.initGeoid();
+            elseif(core.geoid.grid == 0)
+                core.initGeoid();
             end
+            
             geoid = core.geoid;
         end
         
@@ -419,19 +444,25 @@ classdef Core < handle
                 core.rf = rf;
             end
             if nargin == 1 && flag_reset
-            %    rf.reset();
+                rf.init();
+            end
+            if isempty(rf.xyz)
+                rf.init(core.state.getCrdFile);
             end
         end
         
-        function sky = getCoreSky()
+        function sky = getCoreSky(flag_reset)
             % Return the pointer to the Core Sky Object
             %
             % SYNTAX
             %   sky = Core.getCoreSky()
             
+            if nargin == 0
+                flag_reset = false;
+            end
             core = Core.getInstance(false, true);
             sky = core.sky;
-            if isempty(sky)
+            if isempty(sky) || flag_reset
                 sky = Core_Sky();
                 core.sky = sky;
             end            
@@ -538,18 +569,29 @@ classdef Core < handle
             state = Core.getCurrentSettings;
         end
         
+        function flag = isNew()
+            % If the state have not been created, 
+            % the core is not yet initialized
+            %
+            % SYNTAX
+            %   is_new = Core.isNew()
+            core = Core.getInstance(false, true);
+            flag = isempty(core.state);
+        end
+        
         function state = getCurrentSettings(ini_settings_file)
             % Get the persistent settings
             %
             % SYNTAX
             %   state = Core.getCurrentSettings(<ini_settings_file>)
             
-            core = Core.getInstance(false, true);
+            if nargin == 1 && ~isempty(ini_settings_file)
+                core = Core.getInstance(false, true, ini_settings_file);
+            else
+                core = Core.getInstance(false, true);
+            end
             if isempty(core.state)
                 core.state = Prj_Settings();
-            end
-            if nargin == 1 && ~isempty(ini_settings_file)
-                core.state.importIniFile(ini_settings_file);
             end
             % Return the handler to the object containing the current settings
             state = handle(core.state);
@@ -942,7 +984,6 @@ classdef Core < handle
                 flag_preload = false;
             end
             
-            
             session = session_number;
             if ~flag_preload
                 this.state.setCurSession(session_number);
@@ -972,7 +1013,7 @@ classdef Core < handle
                 [out_limits, time_lim_large] = this.getRecTimeSpan(session);
             end
                         
-            if out_limits.length < 2 || (~this.state.isRinexSession() && ~rin_list.isValid) || ((time_lim_large.last - time_lim_large.first) < 0) % && ~rin_list_chk.isValid
+            if out_limits.length < 2 || (out_limits.last - out_limits.first) < 0 || (~this.state.isRinexSession() && ~rin_list.isValid) || ((time_lim_large.last - time_lim_large.first) < 0) % && ~rin_list_chk.isValid
                 is_empty = true;
                 this.log.addMessage(sprintf('No valid receivers are present / session not valid %d', session));
             else
@@ -1032,6 +1073,7 @@ classdef Core < handle
                     end
                 end
             end
+            Core.getReferenceFrame(true); % re-read CRD file every session in case it is changed
         end  
         
         function initSkySession(this, time_lim, flag_no_clock)
@@ -1144,8 +1186,8 @@ classdef Core < handle
             if err_code.crx ~= 0
                 state.resetPath('crx_dir', new_home, true);
             end
-            if err_code.dcb ~= 0
-                state.resetPath('dcb_dir', new_home, true);
+            if err_code.bias ~= 0
+                state.resetPath('bias_dir', new_home, true);
             end
             if err_code.ems ~= 0
                 state.resetPath('ems_dir', new_home, true);
@@ -1212,7 +1254,7 @@ classdef Core < handle
                 'clk', 0, ...
                 'erp', 0, ...
                 'crx', 0, ...
-                'dcb', 0, ...
+                'bias', 0, ...
                 'ems', 0, ...
                 'geoid', 0, ...
                 'iono', 0, ...
@@ -1268,7 +1310,7 @@ classdef Core < handle
             err_code.clk   = state.checkDir('clk_dir', 'Clock Offset dir', flag_verbose);
             err_code.erp   = state.checkDir('erp_dir', 'Earth Rotation Parameters dir', flag_verbose);
             err_code.crx   = state.checkDir('crx_dir', 'Satellite Manouvers dir', flag_verbose);
-            err_code.dcb   = state.checkDir('dcb_dir', 'Differential Code Biases dir', flag_verbose);
+            err_code.bias   = state.checkDir('bias_dir', 'Biases dir', flag_verbose);
             err_code.ems   = state.checkDir('ems_dir', 'EGNOS Message Center dir', flag_verbose);
             
             %err_code.geoid = state.checkDir('geoid_dir', 'Geoid loading dir', flag_verbose);
@@ -1397,11 +1439,34 @@ classdef Core < handle
                 err_code.atx + err_code.atx_f +  ...
                 err_code.hoi * state.isHOI;
         end
+        
+        function printKoSessions_experimental(core)
+            sss_ko = []; 
+            for r = 1:numel(core.rec)
+                coo = core.rec(r).out.getPos;
+                [lid_ko{r}, time{r}, lid_ko_enu, trend_enu] = coo.getBadSession();
+                if any(lid_ko{r})
+                    tmp_ko = (floor(GPS_Time(time{r}{1}(find(lid_ko{r}))) - core.state.getSessionsStart + (core.state.getSessionDuration/2))/core.state.getSessionDuration)';
+                else
+                    tmp_ko = [];
+                end
+                sss_ko = unique([sss_ko tmp_ko]);
+            end
+            fprintf('%s\b\n', sprintf('%d,', sss_ko));
+        end
     end
     
     %% RIN FILE LIST
     % ==================================================================================================================================================
     methods
+        function showRinList(this)
+            state = Core.getCurrentSettings();
+            state.updateObsFileName;
+            this = Core.getCurrentCore;
+            this.updateRinFileList(true, true);
+            this.plotRecList();
+        end
+        
         function  plotRecList(this)
             % plot receiver availability
             %
@@ -1436,7 +1501,7 @@ classdef Core < handle
                 for r = 1 : n_rec
                     name = File_Name_Processor.getFileName(rec_path{r}{1});
                     sta_name{end+1} = name(1:4);
-                    fr(r) = File_Rinex(rec_path{r}, 100);
+                    fr(r) = File_Rinex(rec_path{r}, 100); 
                     name = File_Name_Processor.getFileName(rec_path{r}{1});
                 end
             end
@@ -1455,6 +1520,8 @@ classdef Core < handle
                 y_stop = y_stop.getMatlabTime();
                 fh = figure; fh.Name = sprintf('%03d: Daily RINEX File Availability %d', fh.Number, year); fh.NumberTitle = 'off'; hold on;
                 line([week_time week_time], [0 n_rec+1],'Color',[0.9 0.9 0.9],'LineStyle',':');
+                min_t = sss_stop;
+                max_t = sss_strt;
                 for r = 1 : n_rec
                     if sum(fr(r).is_valid_list) > 0
                         central_time = GPS_Time.getMeanTime(fr(r).first_epoch , fr(r).last_epoch).getMatlabTime;
@@ -1463,6 +1530,12 @@ classdef Core < handle
                         plot(central_time, r * ones(size(central_time)),'.', 'MarkerSize', 20, 'Color', Core_UI.getColor(r, n_rec));
                         if ~isempty(fr(r).first_epoch) && ~isempty(fr(r).last_epoch)
                             % Build a unique line
+                            if (min_t > fr(r).first_epoch.first)
+                                min_t = fr(r).first_epoch.first;
+                            end
+                            if (max_t < fr(r).last_epoch.last)
+                                max_t = fr(r).last_epoch.last;
+                            end
                             t = [fr(r).first_epoch.getMatlabTime  fr(r).last_epoch.getMatlabTime];
                             t = [t t(:, 2)];
                             plot(serialize(t'), serialize(r * [ones(size(t,1),2) nan(size(t,1),1)]'), '-', 'Color', Core_UI.getColor(r, n_rec), 'LineWidth', 4);
@@ -1470,7 +1543,7 @@ classdef Core < handle
                     end
                 end
                 Core_UI.addExportMenu(fh); Core_UI.addBeautifyMenu(fh); Core_UI.beautifyFig(fh, 'light');
-                x_lims = [max(sss_strt.getMatlabTime - 1, y_strt) min(sss_stop.getMatlabTime +1, y_stop)];
+                x_lims = [(max(sss_strt.getMatlabTime, min_t.getMatlabTime) - 0.01) (min(sss_stop.getMatlabTime, max_t.getMatlabTime) + 0.01)];
                 months_time = months_time(months_time > x_lims(1) & months_time < x_lims(2));
                 xlim(x_lims);
                 ylim([0 n_rec + 1]);
@@ -1702,7 +1775,7 @@ classdef Core < handle
             % SYNTAX
             %   rin_list = this.getRinFileList()            
             if isempty(this.rin_list)
-                this.updateRinFileList()
+                this.updateRinFileList();
             end            
             rin_list = this.rin_list;
         end

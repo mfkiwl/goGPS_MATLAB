@@ -14,7 +14,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
@@ -131,28 +131,29 @@ classdef Receiver_Output < Receiver_Commons
         function toString(this)
             % Display on screen information about the receiver
             % SYNTAX this.toString();
+            log = Core.getLogger;
             for r = 1 : numel(this)
                 if ~this(r).isEmpty
-                    fprintf('----------------------------------------------------------------------------------\n')
-                    this(r).log.addMarkedMessage(sprintf('Receiver %s', this(r).parent.getMarkerName()));
-                    fprintf('----------------------------------------------------------------------------------\n')
-                    this(r).log.addMessage(sprintf(' From     %s', this(r).time.first.toString()));
-                    this(r).log.addMessage(sprintf(' to       %s', this(r).time.last.toString()));
-                    this(r).log.newLine();
-                    this(r).log.addMessage(sprintf(' Rate of the observations [s]:            %d', this(r).getRate()));
-                    this(r).log.newLine();
+                    log.simpleSeparator();
+                    log.addMarkedMessage(sprintf('Receiver %s', this(r).parent.getMarkerName()));
+                    log.simpleSeparator();
+                    log.addMessage(sprintf(' From     %s', this(r).time.first.toString()));
+                    log.addMessage(sprintf(' to       %s', this(r).time.last.toString()));
+                    log.newLine();
+                    log.addMessage(sprintf(' Rate of the observations [s]:            %d', this(r).getRate()));
+                    log.newLine();
                     
-                    fprintf(' ----------------------------------------------------------\n')
+                    log.smallSeparator();
                     if ~isempty(this(r).xyz)
                         enu = zero2nan(this(r).xyz); [enu(:, 1), enu(:, 2), enu(:, 3)] = cart2plan(zero2nan(this(r).xyz(:,1)), zero2nan(this(r).xyz(:,2)), zero2nan(this(r).xyz(:,3)));
                         xyz_m = median(zero2nan(this(r).xyz), 1, 'omitnan');
                         enu_m = median(enu, 1, 'omitnan');
-                        this(r).log.newLine();
-                        this(r).log.addMessage(' Receiver median position:');
-                        this(r).log.addMessage(sprintf('     X = %+16.4f m        E = %+16.4f m\n     Y = %+16.4f m        N = %+16.4f m\n     Z = %+16.4f m        U = %+16.4f m', ...
+                        log.newLine();
+                        log.addMessage(' Receiver median position:');
+                        log.addMessage(sprintf('     X = %+16.4f m        E = %+16.4f m\n     Y = %+16.4f m        N = %+16.4f m\n     Z = %+16.4f m        U = %+16.4f m', ...
                             xyz_m(1), enu_m(1), xyz_m(2), enu_m(2), xyz_m(3), enu_m(3)));
                     end
-                    fprintf(' ----------------------------------------------------------\n')
+                    log.smallSeparator();
                 end
             end
         end                
@@ -239,7 +240,11 @@ classdef Receiver_Output < Receiver_Commons
             %
             % SYNTAX
             %   xyz = this.getPositionTime()
-            time = this.time_pos.getCopy();
+            if isa(this.time_pos, 'GPS_Time')
+                time = this.time_pos.getCopy();
+            else
+                time = [];
+            end
         end
         
         function [pwv, time] = getPwv(this)
@@ -344,9 +349,11 @@ classdef Receiver_Output < Receiver_Commons
                 for e = 1: this.time_pos.length
                     c_time = this.time_pos.getEpoch(e);
                     filename = fnp.dateKeyRep(sprintf('%s/station/IGS_solutions/COO/${WWWW}/igs${YY}P${WWWWD}.ssc', data_dir), c_time);
-                    if exist(filename, 'file') ~= 2
-                        remote_file_name = fnp.dateKeyRep('gnss/products/${WWWW}/igs${YY}P${WWWWD}.ssc.Z',c_time);
-                        ftp_dw = FTP_Downloader('cddis.nasa.gov',21);
+                    if exist(filename, 'file') ~= 2                        
+                        remote_file_name = fnp.dateKeyRep('pub/igs/products/${WWWW}/IGS${YY}P${WWWWD}.ssc.Z',c_time);
+                        ftp_dw = FTP_Downloader('igs.ensg.ign.fr',21);
+                        %remote_file_name = fnp.dateKeyRep('gnss/products/${WWWW}/igs${YY}P${WWWWD}.ssc.Z',c_time);
+                        %ftp_dw = FTP_Downloader('cddis.nasa.gov',21);
                         [pathstr, name, ext] = fileparts(filename);
                         ftp_dw.downloadUncompress(remote_file_name, pathstr);
                     end
@@ -509,7 +516,7 @@ classdef Receiver_Output < Receiver_Commons
     % ==================================================================================================================================================
     
     methods
-        function injectResult(this, rec_work, rate)
+        function injectResult(this, rec_work, rate, flag_force)
             % inject the results of receiver work into receiver output
             %
             % SYNTAX
@@ -525,6 +532,8 @@ classdef Receiver_Output < Receiver_Commons
             end
             
             log = Core.getLogger();
+            
+            % Check push conditions ---------------------------------------
             try
                 % If it is empty go on without warning, otherwise check the
                 % number of valid results
@@ -544,7 +553,21 @@ classdef Receiver_Output < Receiver_Commons
                 flag_ok = true;
             end
             
-            if flag_ok && (~(rec_work.isEmpty || rec_work.flag_currupted || not((rec_work.isPreProcessed && rec_work.quality_info.s0_ip < 2*1e2 && ~isempty(rec_work.quality_info.s0) && ~isnan(rec_work.quality_info.s0) && ~(rec_work.quality_info.s0 < 1e-5)))))
+            if nargin < 4 || isempty(flag_force)
+                flag_force = false;
+            end
+            if flag_ok && rec_work.isPreProcessed && rec_work.quality_info.s0_ip > 5
+                log.addError('Pre-processing sigma0 is above 5m, this means that it probably failed, not importing results as output');
+                flag_ok = false;
+            end
+            if flag_ok && ~isempty(rec_work.quality_info.s0) && ~isnan(rec_work.quality_info.s0) && rec_work.quality_info.s0 > 0.05
+                log.addError('Processing sigma0 is above 5cm, this means that it probably failed, not importing results as output');
+                flag_ok = false;
+            end
+            % -------------------------------------------------------------
+            
+            % push if ok
+            if flag_force || (flag_ok && (~(rec_work.isEmpty || rec_work.flag_currupted)))
                 % set the id_sync only to time in between out times
                 %[this.time.length length(this.zwd) rec_work.time.length length(rec_work.zwd)]
                 basic_export = false;
@@ -565,7 +588,7 @@ classdef Receiver_Output < Receiver_Commons
                     rec_work.id_sync = 1 : rec_work.time.length;
                     basic_export = true;
                 end                
-                is_last_session = rec_work.getTime.last >= this.state.sss_date_stop;
+                is_last_session = rec_work.getTime.last >= state.sss_date_stop;
                 % NOTE TROPO SMOOTHING.
                 % in case of tropo smoothing we keep only the right buffer
                 % because they will be used in the next session for
@@ -574,7 +597,7 @@ classdef Receiver_Output < Receiver_Commons
                 % epochs of the output are the central ones of each
                 % session and not the ones of the buffers.
                 
-                rec_work.cropIdSync4out(true, ~this.state.isSmoothTropoOut() || is_last_session);
+                rec_work.cropIdSync4out(true, ~state.isSmoothTropoOut() || is_last_session);
                 work_time = rec_work.getTime();
                 if ~work_time.isEmpty
                     initial_len = this.time.length;
@@ -584,13 +607,13 @@ classdef Receiver_Output < Receiver_Commons
                         idx2 = 0;
                         this.time = work_time;
                     else
-                        if this.state.isSmoothTropoOut()
+                        if state.isSmoothTropoOut()
                             time_old = this.time.getCopy();
                             re_time_bf = time_old.getNominalTime(min(1, time_old.getRate));
                             smt_buf_rgt = re_time_bf.last;
                         end
                         [this.time, idx1, idx2] = this.time.injectBatch(work_time); % WARNING for tropo smoothing: the epoch before the end of the previous window will keep the their own epochs, the one after will keep the epoch of the work time
-                        if this.state.isSmoothTropoOut()
+                        if state.isSmoothTropoOut()
                             smt_buf_lft = rec_work.time.getNominalTime(min(1, rec_work.time.getRate)).first();
                             idx_smt1 = re_time_bf >= smt_buf_lft;
                             idx_smt2 = rec_work.time.getEpoch(id_sync_old).getNominalTime(min(1, rec_work.time.getRate)) <= smt_buf_rgt;
@@ -601,19 +624,19 @@ classdef Receiver_Output < Receiver_Commons
                     %%% inject data
                     if ~basic_export
                         % Inject times
-                        if this.state.flag_out_dt
+                        if state.flag_out_dt
                             this.dt       = Core_Utils.injectData(this.dt, rec_work.getDt() + rec_work.getDtPh(), idx1, idx2);
                             this.desync   = Core_Utils.injectData(this.desync, rec_work.getDesync(), idx1, idx2);
                             this.dt_ip    = Core_Utils.injectData(this.dt_ip, rec_work.getDtIp(), idx1, idx2);
                             %this.n_sat_ep = Core_Utils.injectData(this.n_sat_ep, rec_work.getNSat(), idx1, idx2);
                         end
-                        if this.state.flag_out_apr_tropo
+                        if state.flag_out_apr_tropo
                             this.apr_zhd = Core_Utils.injectData(this.apr_zhd, rec_work.getAprZhd(), idx1, idx2);
                             this.apr_zwd = Core_Utils.injectData(this.apr_zwd, rec_work.getAprZwd(), idx1, idx2);
                         end
                         
                         % Inject used meteo parameters
-                        if this.state.flag_out_pth
+                        if state.flag_out_pth
                             [p, t, h]         = rec_work.getPTH(true);
                             this.pressure     = Core_Utils.injectData(this.pressure, p, idx1, idx2);
                             this.temperature  = Core_Utils.injectData(this.temperature, t, idx1, idx2);
@@ -621,70 +644,50 @@ classdef Receiver_Output < Receiver_Commons
                         end
                         
                         % Inject mapping functions
-                        if this.state.flag_out_mf
+                        if state.flag_out_mf
                             [mfh, mfw]            = rec_work.getSlantMF();
                             this.sat.mfw          = Core_Utils.injectData(this.sat.mfw, mfw, idx1, idx2);
                             this.sat.mfh          = Core_Utils.injectData(this.sat.mfh, mfh, idx1, idx2);
                         end
                         
                         % Inject outliers and cs
-                        if this.state.flag_out_ocs
+                        if state.flag_out_ocs
                             this.sat.outliers   = Core_Utils.injectData(this.sat.outliers, rec_work.getObsOutSat(), idx1, idx2);
                             this.sat.cycle_slip = Core_Utils.injectData(this.sat.cycle_slip, rec_work.getObsCsSat(), idx1, idx2);
                         end
                         
-                        if this.state.isNSatOut()
+                        if state.isNSatOut()
                             cc = Core.getState.getConstellationCollector;
                             % all sats
                             if isempty(this.quality_info.n_spe)
                                 this.quality_info.n_spe = struct('A', [], 'G', [], 'R', [], 'E', [], 'J', [], 'C', [], 'I', []);
                             end
-                            this.quality_info.n_spe.A = Core_Utils.injectData(this.quality_info.n_spe.A, rec_work.quality_info.n_spe.A(rec_work.getIdSync), idx1, idx2);
-                            % for each constellations
-                            for sys_c = cc.getActiveSysChar
-                                if ~isempty(rec_work.quality_info.n_spe.(sys_c))
-                                    this.quality_info.n_spe.(sys_c) = Core_Utils.injectData(this.quality_info.n_spe.(sys_c), rec_work.quality_info.n_spe.(sys_c)(rec_work.getIdSync), idx1, idx2);
+                            if not(isempty(rec_work.quality_info.n_spe))
+                                this.quality_info.n_spe.A = Core_Utils.injectData(this.quality_info.n_spe.A, rec_work.quality_info.n_spe.A(rec_work.getIdSync), idx1, idx2);
+                                % for each constellations
+                                for sys_c = cc.getActiveSysChar
+                                    if ~isempty(rec_work.quality_info.n_spe.(sys_c))
+                                        this.quality_info.n_spe.(sys_c) = Core_Utils.injectData(this.quality_info.n_spe.(sys_c), rec_work.quality_info.n_spe.(sys_c)(rec_work.getIdSync), idx1, idx2);
+                                    end
                                 end
                             end
                         end
                         
-                        if ~this.state.isSmoothTropoOut() || is_this_empty
+                        if ~state.isSmoothTropoOut() || is_this_empty
                             % Inject tropo related parameters
-                            if this.state.flag_out_ztd
+                            if state.flag_out_ztd
                                 this.ztd     = Core_Utils.injectData(this.ztd, rec_work.getZtd(), idx1, idx2);
                             end
-                            if this.state.flag_out_zwd
+                            if state.flag_out_zwd
                                 this.zwd     = Core_Utils.injectData(this.zwd, rec_work.getZwd(), idx1, idx2);
                             end
-                            if this.state.flag_out_pwv
+                            if state.flag_out_pwv
                                 this.pwv     = Core_Utils.injectData(this.pwv, rec_work.getPwv(), idx1, idx2);
                             end
-                            if this.state.flag_out_tropo_g
+                            if state.flag_out_tropo_g
                                 [gn, ge]     = rec_work.getGradient();
                                 this.tgn     = Core_Utils.injectData(this.tgn, gn, idx1, idx2);
                                 this.tge     = Core_Utils.injectData(this.tge, ge, idx1, idx2);
-                            end
-                            if this.state.isResOut
-                                if isempty(this.sat.res)
-                                    this.sat.res = Residuals();
-                                end
-                                
-                                % Get the residual only in the time span relative to the session (no buffers)
-                                res = rec_work.sat.res.getCopy();
-                                [is_ph] = rec_work.sat.res.isPhase();
-                                [is_combined] = rec_work.sat.res.isCombined();
-                                if ~this.state.isResPrOut
-                                    res.remEntry(~is_ph);
-                                end
-                                if ~this.state.isResPhOut
-                                    res.remEntry(is_ph);
-                                end
-                                if ~this.state.isResCoOut
-                                    res.remEntry(is_combined);
-                                end
-                                [~, lim] = this.state.getSessionLimits;
-                                res.cutEpochs(lim);
-                                this.sat.res.injest(res);
                             end
                         else
                             % there is probably smoothing
@@ -692,17 +695,40 @@ classdef Receiver_Output < Receiver_Commons
                             bk_idx1 = idx1;
                             bk_idx2 = idx2;
                         end
+                        
+                        if state.isResOut
+                            if isempty(this.sat.res)
+                                this.sat.res = Residuals();
+                            end
+                            
+                            % Get the residual only in the time span relative to the session (no buffers)
+                            res = rec_work.sat.res.getCopy();
+                            [is_ph] = rec_work.sat.res.isPhase();
+                            [is_combined] = rec_work.sat.res.isCombined();
+                            if ~state.isResPrOut
+                                res.remEntry(~is_ph);
+                            end
+                            if ~state.isResPhOut
+                                res.remEntry(is_ph);
+                            end
+                            if ~state.isResCoOut
+                                res.remEntry(is_combined);
+                            end
+                            [~, lim] = state.getSessionLimits;
+                            res.cutEpochs(lim);
+                            this.sat.res.injest(res);
+                        end
                     end
                     
                     if (initial_len == size(this.sat.az,1)) && (idx2 == 0) && ~is_this_empty
                         [~, idx1, idx2] = this.time.injectBatch(work_time);
                     end
                     [az, el] = rec_work.getAzEl;
-                    if this.state.flag_out_azel
+                    if state.flag_out_azel
                         this.sat.az      = Core_Utils.injectData(this.sat.az, az, idx1, idx2);
                         this.sat.el      = Core_Utils.injectData(this.sat.el, el, idx1, idx2);
                     end
-                    if this.state.flag_out_quality
+                    if state.flag_out_quality
                         this.sat.quality = Core_Utils.injectData(this.sat.quality, rec_work.getQuality(), idx1, idx2);
                     end
                                         
@@ -744,7 +770,7 @@ classdef Receiver_Output < Receiver_Commons
                     % reset the old  complete id_sync
                     rec_work.id_sync = id_sync_old;
                     % inject with smoothing
-                    if ~basic_export && ~is_this_empty && this.state.isSmoothTropoOut()
+                    if ~basic_export && ~is_this_empty && state.isSmoothTropoOut()
                         rec_work.cropIdSync4out(false, is_last_session); % if this is the last session cut the right part of the data
                         if is_last_session
                             idx_smt2 = idx_smt2(1 : numel(rec_work.getZtd));
@@ -765,60 +791,45 @@ classdef Receiver_Output < Receiver_Commons
                             id_stop = [];
                         end
                         if ~isempty(id_stop)
-                            if this.state.flag_out_ztd
+                            if state.flag_out_ztd
                                 this.ztd     = Core_Utils.injectSmtData(zero2nan(this.ztd), zero2nan(rec_work.getZtd()), idx_smt1, idx_smt2, time_1, time_2, id_stop, id_start);
                             end
-                            if this.state.flag_out_zwd
+                            if state.flag_out_zwd
                                 this.zwd     = Core_Utils.injectSmtData(zero2nan(this.zwd), zero2nan(rec_work.getZwd()), idx_smt1, idx_smt2, time_1, time_2, id_stop, id_start);
                             end
-                            if this.state.flag_out_pwv
+                            if state.flag_out_pwv
                                 this.pwv     = Core_Utils.injectSmtData(zero2nan(this.pwv), zero2nan(rec_work.getPwv()), idx_smt1, idx_smt2, time_1, time_2, id_stop, id_start);
                             end
-                            if this.state.flag_out_tropo_g
+                            if state.flag_out_tropo_g
                                 [gn, ge]     = rec_work.getGradient();
                                 this.tgn     = Core_Utils.injectSmtData(zero2nan(this.tgn), zero2nan(gn), idx_smt1, idx_smt2, time_1, time_2, id_stop, id_start);
                                 this.tge     = Core_Utils.injectSmtData(zero2nan(this.tge), zero2nan(ge), idx_smt1, idx_smt2, time_1, time_2, id_stop, id_start);
                             end
-                            if this.state.isResOut
-                                if isempty(this.sat.res)
-                                    this.sat.res = Residuals();
-                                end                                
-                                
-                                % Get the residual only in the time span relative to the session (no buffers)
-                                res = rec_work.sat.res.getCopy();
-                                [~, lim] = this.state.getSessionLimits;                                
-                                res.cutEpochs(lim);
-                                this.sat.res.injest(res);
-                            end
                         else
                             % Inject tropo related parameters
-                            if this.state.flag_out_ztd
+                            if state.flag_out_ztd
                                 tmp = rec_work.getZtd();
                                 this.ztd     = [this.ztd; tmp(~idx_smt2)];
                             end
-                            if this.state.flag_out_zwd
+                            if state.flag_out_zwd
                                 tmp = rec_work.getZwd();
                                 this.zwd     = [this.zwd; tmp(~idx_smt2)];
                             end
-                            if this.state.flag_out_pwv
+                            if state.flag_out_pwv
                                 tmp = rec_work.getPwv();
                                 this.pwv     = [this.pwv; tmp(~idx_smt2)];
                             end
-                            if this.state.flag_out_tropo_g
+                            if state.flag_out_tropo_g
                                 [gn, ge]     = rec_work.getGradient();
                                 this.tgn     = [this.tgn; gn(~idx_smt2)];
                                 this.tge     = [this.tge; ge(~idx_smt2)];
-                            end
-                            if this.state.isResCoOut
-                                res_in = rec_work.getU1();
-                                this.sat.res = [this.sat.res; res_in(~idx_smt2,:)];
                             end
                         end
                         rec_work.id_sync = id_sync_old; % restore id_sync_old
                     end
                     
                     %--- append additional coo
-                    if this.state.flag_coo_rate
+                    if state.flag_coo_rate
                         if isempty(this.add_coo)
                             this.add_coo = struct('rate',[],'coo',[]);
                         end

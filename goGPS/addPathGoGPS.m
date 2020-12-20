@@ -1,4 +1,4 @@
-function addPathGoGPS()
+function addPathGoGPS(flag_rem)
 % Script to add goGPS folders to path with black_list
 
 %--------------------------------------------------------------------------
@@ -6,7 +6,7 @@ function addPathGoGPS()
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
@@ -82,7 +82,11 @@ function addPathGoGPS()
         for l = size(l1, 2) : -1 : 1
             p(l1(l) : l2(l)) = [];
         end
-
-        addpath(p);
+        
+        if nargin == 1 && flag_rem
+            rmpath(p);
+        else
+            addpath(p);
+        end
     end
 end

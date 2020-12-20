@@ -2,6 +2,8 @@
 
 _Welcome to the goGPS wiki pages, here we will try to write useful information for users and developers._
 
+**Disclaimer**: Some links might be broken in the wiki here on GitHub. If you need to access documentation or search for more information on the software visit our website at [gogps-project.github.io](https://gogps-project.github.io). 
+
 **goGPS** is a software created for processing GNSS raw data. It was originally written specifically to work with GPS single-frequency low-cost receivers but now it can fully exploit **multi-constellation**, **multi-frequency**, **multi-tracking** observations. goGPS implements multiple algorithms to analyze the data, and at the moment these include two main Least Squares (LS) engines: one working on combination of observables (e.g. iono-free observations) and one able to use all the frequencies and trackings logged without performing any combinations (ionospheric delay are parameters of the normal equations).
 The **combined and uncombined engines** can both compute Precise Point Positioning (PPP) solutions and Network adjustments (NET).
 

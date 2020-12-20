@@ -16,7 +16,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
@@ -113,7 +113,7 @@ classdef Meteo_Data < handle
         data = [];          % Meteorological file [n_epoch x n_type]
 
         xyz = [0 0 0];      % geocentric coordinate of the sensor
-        amsl = 0;           % hortometric height of the sensor
+        amsl = 0;           % orthometric height of the sensor
         is_valid = false;   % Status of valitity of the file;
         
         max_bound = 90;     % Max bound to extrapolate
@@ -196,8 +196,8 @@ classdef Meteo_Data < handle
                     tmp = sscanf(txt(lim(fln, 1) + (0:41)),'%f')';                                               % read value
                     this.xyz = iif(isempty(tmp) || ~isnumeric(tmp) || (numel(tmp) ~= 3), [0 0 0], tmp);          % check value integrity
                     if sum(abs(this.xyz)) > 0
-                        [~, lam, h, phiC] = cart2geod(this.xyz(1), this.xyz(2), this.xyz(3));
-                        this.amsl = h - getOrthometricCorr(phiC, lam);
+                        [phi, lam, h] = cart2geod(this.xyz(1), this.xyz(2), this.xyz(3));
+                        this.amsl = h - getOrthometricCorr(phi, lam);
                     else
                         this.amsl = 0;
                     end
@@ -485,8 +485,8 @@ classdef Meteo_Data < handle
             % Skip NaN epochs
             this.marker_name = marker_name;
             this.xyz = pos_xyz;
-            [~, lam, h, phiC] = cart2geod(this.xyz(1), this.xyz(2), this.xyz(3));
-            this.amsl = h - getOrthometricCorr(phiC, lam);
+            coo = Coordinates.fromXYZ(pos_xyz);
+            [~, ~, ~, this.amsl] = coo.getGeodetic();
             ok = ~obs_time.isnan();
             this.data = data(ok, :);
             this.type = type;
@@ -524,7 +524,7 @@ classdef Meteo_Data < handle
 
         function export(this, file_name)
             % Export data to a meteorological RINEX
-            
+            %
             % SYNTAX
             %   this.export(file_name)
             
@@ -537,18 +537,27 @@ classdef Meteo_Data < handle
                 % Find the time span of the observations
                 [yyyy, doy] =  this.time.getDOY;
                 [~, day_start, day_id] = unique(yyyy*1e4+doy);
+                                
+                if (nargin == 2) && exist(file_name, 'dir') == 7
+                    file_path = fullfile(file_name, '${YYYY}', '${DOY}');
+                    file_name = '';                
+                end
                 
                 if (nargin == 1)
+                    file_name = '';
                     state = Core.getCurrentSettings();
-                    file_name =  this.marker_name;
+                    file_path = fullfile(state.getMetDir(), '${YYYY}', '${DOY}');
+                end
+                if isempty(file_name)
+                    file_name =  strrep(this.marker_name, ' ', '_');
                     % generate short 4 letters name
                     if numel(file_name) < 4
                         file_name = sprintf(['%0' num2str(4-numel(file_name)) 'd%s'], 0, file_name);
                     else
                         file_name = upper(file_name(1:4));
                     end
-                    file_name = [state.getMetDir() filesep '${YYYY}_${DOY}' filesep file_name '_${DOY}0.${YY}m'];
-                end
+                    file_name = fullfile([file_path filesep], [file_name '_${DOY}0.${YY}m']);
+                end                                
                 
                 for d = 1 : numel(day_start)
                     id = day_id == d;
@@ -853,9 +862,9 @@ classdef Meteo_Data < handle
             % 
             % SYNTAX
             %   this.correctK2C()
-            id_k = (this.data(:, this.type == Meteo_Data.TD) > 100);
-            this.data(id_k, this.type == Meteo_Data.TD) = this.data(id_k, this.type == Meteo_Data.TD) - 273.15;
-            if ~isempty(id_k)
+            id_k_ko = (this.data(:, this.type == Meteo_Data.TD) > 100);
+            this.data(id_k_ko, this.type == Meteo_Data.TD) = this.data(id_k_ko, this.type == Meteo_Data.TD) - 273.15;
+            if any(id_k_ko)
                 this.log.addWarning(sprintf('Temperature are in K instead of Celsius in "%s"', this.getMarkerName));
             end
 
@@ -867,9 +876,9 @@ classdef Meteo_Data < handle
             % 
             % SYNTAX
             %   this.correctInvalidPressure()
-            id_p = (this.data(:, this.type == Meteo_Data.PR) < 750) | (this.data(:, this.type == Meteo_Data.PR) > 1200);
-            this.data(id_p, this.type == Meteo_Data.PR) = 1013.25;
-            if ~isempty(id_p)
+            id_p_ko = (this.data(:, this.type == Meteo_Data.PR) < 750) | (this.data(:, this.type == Meteo_Data.PR) > 1200);
+            this.data(id_p_ko, this.type == Meteo_Data.PR) = 1013.25;
+            if any(id_p_ko)
                 this.log.addWarning(sprintf('Pressure is out of the valid range 750~1200 mbar in "%s"', this.getMarkerName));
             end
         end
@@ -889,7 +898,7 @@ classdef Meteo_Data < handle
             t_thr = 3000;
             
             q_fun_obs = fun(d_oo) .* repmat(fun(d_op)', size(d_oo,1), 1);
-            q_fun_obs = triu(q_fun_obs) + triu(q_fun_obs,1)';
+            q_fun_obs = triu(q_fun_obs) + triu(q_fun_obs, 1)';
             
             % getting data
             id_data = find(st_type(:, type));
@@ -1017,11 +1026,9 @@ classdef Meteo_Data < handle
             %   md1 = Meteo_Data.getVMS('test', [x y z], station(1).getObsTime, md)
 
             md = Meteo_Data();
-            [~, lam, h, phiC] = cart2geod(xyz(1), xyz(2), xyz(3));
-            [e, n] = cart2plan(xyz(1), xyz(2), xyz(3));
-
-            amsl = h - getOrthometricCorr(phiC, lam);
-
+            coo_ref = Coordinates.fromXYZ(xyz);
+            [~, ~, ~, amsl] = coo_ref.getGeodetic();
+            
             n_station = numel(station);
 
             % In a VMS I keep only PR TD HR
@@ -1035,7 +1042,11 @@ classdef Meteo_Data < handle
 
                 % Get the stations location
                 [x, y, z] = station(s).getLocation();
-                [e_obs(s), n_obs(s)] = cart2plan(x, y, z);
+                coo = Coordinates.fromXYZ(x, y, z);
+                enu = coo.getLocal(coo_ref);
+                e_obs(s) = enu(1);
+                n_obs(s) = enu(2); 
+                u_obs(s) = enu(3);
             end
             id_ok = ~isnan(e_obs);
             n_obs = n_obs(id_ok); 
@@ -1044,7 +1055,7 @@ classdef Meteo_Data < handle
 
             [e_mesh, n_mesh] = meshgrid(e_obs, n_obs);
             d_oo = sqrt(abs(e_mesh - e_mesh').^2 + abs(n_mesh - n_mesh').^2); % distance obs obs
-            d_op = sqrt(abs(e_obs - e).^2 + abs(n_obs - n).^2);               % distance obs o prediction point
+            d_op = sqrt(abs(e_obs).^2 + abs(n_obs).^2);               % distance obs o prediction point
 
             % fun for pressure
             fun = @(dist) 0.2 * exp(-(dist/0.8e4)) + exp(-(dist/6e3).^2);
@@ -1255,6 +1266,132 @@ classdef Meteo_Data < handle
             end
         end
         
+        function md = importCanadianCSV(file_name, altitude)
+            %IMPORTFILE Import numeric data from a text file as a matrix.
+            %   meteo_data = importCanadianCSV(file_name, altitude) Reads data from text file FILENAME for the default selection.
+            %
+            % Example:
+            %   md = Meteo_Data.importCanadianCSV('en_climate_hourly_NU_2401203_01-2019_P1H.csv', 0);
+            %
+            %    See also TEXTSCAN.
+            
+            % Auto-generated by MATLAB on 2020/07/27 15:23:32
+            
+            %% Initialize variables.
+            delimiter = ',';
+            start_row = 2;
+            end_row = inf;
+            
+            %% Read columns of data as text:
+            % For more information, see the TEXTSCAN documentation.
+            formatSpec = '%q%q%q%*q%q%*q%*q%*q%*q%q%*q%*q%*q%q%*q%q%*q%q%*q%*q%*q%q%[^\n\r]';
+            
+            %% Open the text file.
+            fileID = fopen(file_name,'r','n','UTF-8');
+            % Skip the BOM (Byte Order Mark).
+            fseek(fileID, 3, 'bof');
+            
+            %% Read columns of data according to the format.
+            % This call is based on the structure of the file used to generate this code. If an error occurs for a different file, try regenerating the code from the Import Tool.
+            dataArray = textscan(fileID, formatSpec, end_row(1)-start_row(1)+1, 'Delimiter', delimiter, 'TextType', 'string', 'HeaderLines', start_row(1)-1, 'ReturnOnError', false, 'EndOfLine', '\r\n');
+            for block=2:length(start_row)
+                frewind(fileID);
+                dataArrayBlock = textscan(fileID, formatSpec, end_row(block)-start_row(block)+1, 'Delimiter', delimiter, 'TextType', 'string', 'HeaderLines', start_row(block)-1, 'ReturnOnError', false, 'EndOfLine', '\r\n');
+                for col=1:length(dataArray)
+                    dataArray{col} = [dataArray{col};dataArrayBlock{col}];
+                end
+            end
+            
+            %% Close the text file.
+            fclose(fileID);
+            
+            %% Convert the contents of columns containing numeric text to numbers.
+            % Replace non-numeric text with NaN.
+            raw = repmat({''},length(dataArray{1}),length(dataArray)-1);
+            for col=1:length(dataArray)-1
+                raw(1:length(dataArray{col}),col) = mat2cell(dataArray{col}, ones(length(dataArray{col}), 1));
+            end
+            numericData = NaN(size(dataArray{1},1),size(dataArray,2));
+            
+            for col=[1,2,5,6,7,8,9]
+                % Converts text in the input cell array to numbers. Replaced non-numeric text with NaN.
+                rawData = dataArray{col};
+                for row=1:size(rawData, 1)
+                    % Create a regular expression to detect and remove non-numeric prefixes and suffixes.
+                    regexstr = '(?<prefix>.*?)(?<numbers>([-]*(\d+[\,]*)+[\.]{0,1}\d*[eEdD]{0,1}[-+]*\d*[i]{0,1})|([-]*(\d+[\,]*)*[\.]{1,1}\d+[eEdD]{0,1}[-+]*\d*[i]{0,1}))(?<suffix>.*)';
+                    try
+                        result = regexp(rawData(row), regexstr, 'names');
+                        numbers = result.numbers;
+                        
+                        % Detected commas in non-thousand locations.
+                        invalidThousandsSeparator = false;
+                        if numbers.contains(',')
+                            thousandsRegExp = '^\d+?(\,\d{3})*\.{0,1}\d*$';
+                            if isempty(regexp(numbers, thousandsRegExp, 'once'))
+                                numbers = NaN;
+                                invalidThousandsSeparator = true;
+                            end
+                        end
+                        % Convert numeric text to numbers.
+                        if ~invalidThousandsSeparator
+                            numbers = textscan(char(strrep(numbers, ',', '')), '%f');
+                            numericData(row, col) = numbers{1};
+                            raw{row, col} = numbers{1};
+                        end
+                    catch
+                        raw{row, col} = rawData{row};
+                    end
+                end
+            end
+            
+            % Convert the contents of columns with dates to MATLAB datetimes using the specified date format.
+            try
+                dates{4} = datetime(dataArray{4}, 'Format', 'yyyy-MM-dd HH:mm', 'InputFormat', 'yyyy-MM-dd HH:mm');
+            catch
+                try
+                    % Handle dates surrounded by quotes
+                    dataArray{4} = cellfun(@(x) x(2:end-1), dataArray{4}, 'UniformOutput', false);
+                    dates{4} = datetime(dataArray{4}, 'Format', 'yyyy-MM-dd HH:mm', 'InputFormat', 'yyyy-MM-dd HH:mm');
+                catch
+                    dates{4} = repmat(datetime([NaN NaN NaN]), size(dataArray{4}));
+                end
+            end
+            
+            dates = dates(:,4);
+            
+            %% Split data into numeric and string columns.
+            rawNumericColumns = raw(:, [1,2,5,6,7,8,9]);
+            rawStringColumns = string(raw(:, 3));
+            
+            
+            %% Replace non-numeric cells with NaN
+            R = cellfun(@(x) ~isnumeric(x) && ~islogical(x),rawNumericColumns); % Find non-numeric cells
+            rawNumericColumns(R) = {NaN}; % Replace non-numeric cells
+            
+            %% Create output variable
+            
+            % Consider to contain only one station
+            id_s = 1;
+            
+            lon = cell2mat(rawNumericColumns(id_s, 1));
+            lat = cell2mat(rawNumericColumns(id_s, 2));
+            coo = Coordinates.fromGeodetic(lat / 180 * pi, lon / 180 * pi, [], altitude);
+            
+            marker_name = char(rawStringColumns(id_s, 1));
+            td = cell2mat(rawNumericColumns(:, 3));
+            id_ok = ~isnan(td);
+            td(~id_ok) = [];
+            dt = datenum(dates{:, 1});
+            obs_time = GPS_Time(dt(id_ok));
+            hr = cell2mat(rawNumericColumns(id_ok, 4));
+            wd = cell2mat(rawNumericColumns(id_ok, 5));
+            ws = cell2mat(rawNumericColumns(id_ok, 6));
+            pr = cell2mat(rawNumericColumns(id_ok, 7))  * 10; % kPa to mBar
+            
+            md = Meteo_Data();
+            md.importRaw(obs_time, [td, pr, hr, wd, ws], [Meteo_Data.TD Meteo_Data.PR Meteo_Data.HR Meteo_Data.WD Meteo_Data.WS], marker_name, coo.getXYZ);
+        end
+        
         function met2Csv(file_list, file_out)
             if ~iscell(file_list)
                 file_list = {file_list};
@@ -1266,7 +1403,7 @@ classdef Meteo_Data < handle
                 fprintf(fid, 'time;temperature;pressure\n');
                 for i = 1 : numel(file_list)
                     md = Meteo_Data(file_list{i});
-                    time = md.getTime.toString('yyyy-mm-dd HH:MM:SS');
+                    time = md.getTime.toString('yyyy-MM-DD HH:mm:SS');
                     temp = num2str(md.getTemperature,'%+6.2f');
                     pres = num2str(md.getPressure,'%7.2f');
                     %uint8(';') = 59

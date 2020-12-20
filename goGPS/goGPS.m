@@ -21,7 +21,7 @@ function goGPS(ini_settings, use_gui, flag_online)
 %   goGPS('../data/project/default_PPP/config/settings.ini');
 %
 % COMPILATION STRING:
-%   tic; mcc -v -d ./bin/ -m goGPS -a tai-utc.dat -a cls.csv -a icpl.csv -a nals.csv -a napl.csv -a remote_resource.ini -a icons/*.png -a utility/thirdParty/guiLayoutToolbox/layout/+uix/Resources/*.png; toc;
+%   tic; mcc -v -d ./bin/ -m goGPS -a tai-utc.dat -a cls.csv -a icpl.csv -a nals.csv -a napl.csv -a remote_resource.ini -a credentials.txt -a goGPS_settings.ini -a icons/*.png -a utility/thirdParty/guiLayoutToolbox/layout/+uix/Resources/*.png; toc;
 %
 
 %--- * --. --- --. .--. ... * ---------------------------------------------
@@ -29,7 +29,7 @@ function goGPS(ini_settings, use_gui, flag_online)
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
@@ -76,6 +76,12 @@ function goGPS(ini_settings, use_gui, flag_online)
         else
             use_gui = 1;
         end
+    else
+        if mod(use_gui, 2) == 0
+            Go_Settings.getInstance.setLogMode(false);
+        else
+            Go_Settings.getInstance.setLogMode(true);
+        end
     end
     
     if ischar(use_gui)
@@ -83,8 +89,7 @@ function goGPS(ini_settings, use_gui, flag_online)
     end    
         
     log = Logger.getInstance();
-    log.setColorMode(Go_Settings.getInstance.isLogColorMode);
-    log.disableFileOut();
+    log.disableFileOut();       
     if use_gui && Go_Settings.getInstance.getLogMode() == 1
         log.enableGUIOut();
         log.disableScreenOut();
@@ -93,6 +98,8 @@ function goGPS(ini_settings, use_gui, flag_online)
         log.enableScreenOut();
         log.disableGUIOut();
     end
+    log.setColorMode(Go_Settings.getInstance.isLogColorMode);
+    
     
     % Show coloured header
     cm = log.getColorMode();
@@ -103,9 +110,18 @@ function goGPS(ini_settings, use_gui, flag_online)
     if nargin >= 1 && ~isempty(ini_settings)
         core = Core.getInstance(true, false, ini_settings);    
     else
-        state = Core.getCurrentSettings();
-        core = Core.getInstance(true, false, state); % Init Core
-    end        
+        if Core.isNew()
+            core = Core.getInstance(true, false); % Init Core
+        else
+            state = Core.getCurrentSettings();
+            core = Core.getInstance(true, false, state); % Init Core
+        end
+    end
+    if ~core.isValid
+        log.addError('Nothing to do, core is not valid');
+        return
+    end
+    
     core.setModeGUI(use_gui);
     if nargin < 3 || isempty(flag_online)
         flag_online = true;
@@ -126,6 +142,7 @@ function goGPS(ini_settings, use_gui, flag_online)
         ui = Core_UI.getInstance();
         flag_wait = true;
         ui.openGUI(flag_wait);
+        Core_UI.isHideFig(false);
         
         if ~ui.isGo()
             return
@@ -137,7 +154,7 @@ function goGPS(ini_settings, use_gui, flag_online)
     if core.state.isLogOnFile()
         log.newLine();
         log.enableFileOut();
-        log.setOutFile(fullfile(core.state.getOutDir, 'log', 'goGPS_run_${NOW}.log')); % <= to enable project logging
+        log.setOutFile(fullfile(core.state.getOutDir, 'log', sprintf('goGPS_run_%s_${NOW}.log', strrep(core.state.getPrjName, ' ', '_')))); % <= to enable project logging
         % log.setOutFile(); <= to enable system logging (save into system folder)
         log.disableFileOut();
         fnp = File_Name_Processor();

@@ -21,7 +21,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
@@ -66,6 +66,8 @@ classdef File_Name_Processor < handle
         GPS_1D = '${1D}';
         GPS_QQ = '${QQ}';
         GPS_5M = '${5M}';
+        VMF_RES = '${VMFR}';
+        VMF_SOURCE = '${VMFS}';
     end
 
     properties (SetAccess = private, GetAccess = public)
@@ -83,12 +85,18 @@ classdef File_Name_Processor < handle
             % Constructor
         end
 
-        function file_name_out = dateKeyRep(this, file_name, date, session)
+        function file_name_out = dateKeyRep(this, file_name, date, session,vmf_res,vmf_source)
             % substitute time placeholder with the proper format
             % SYNTAX: file_name = this.dateKeyRep(file_name, date, session)
-            narginchk(3,4)
+            narginchk(3,6)
             if (nargin < 4)
                 session = '0';
+            end
+            if (nargin < 5)
+                vmf_res = '';
+            end
+            if (nargin < 6)
+                vmf_source = '';
             end
             file_name_out = file_name;
             if any(file_name_out == '$') && ~isempty(regexp(file_name_out, '\$\{Y|(DOY)', 'once'))
@@ -122,6 +130,12 @@ classdef File_Name_Processor < handle
             if any(file_name_out == '$')
                 file_name_out = strrep(file_name_out, this.GPS_SESSION, sprintf('%01d', session));
             end
+            if any(file_name_out == '$')
+                file_name_out = strrep(file_name_out, this.VMF_RES, char(vmf_res));
+            end
+            if any(file_name_out == '$')
+                file_name_out = strrep(file_name_out, this.VMF_SOURCE, char(vmf_source));
+            end
         end
 
         function step_sec = getStepSec(this, file_name)
@@ -148,17 +162,21 @@ classdef File_Name_Processor < handle
             end
         end
 
-        function [file_name_lst, date_list] = dateKeyRepBatch(this, file_name, date_start, date_stop, session_list, session_start, session_stop)
+        function [file_name_lst, date_list] = dateKeyRepBatch(this, file_name, date_start, date_stop, session_list, session_start, session_stop, vmf_res, vmf_source)
             % substitute time placeholder with the proper format
             % SYNTAX: file_name = this.dateKeyRepBatch(file_name, date_start, date_stop)
             % NOTE: I consider only two possible file formats:
             %         - dependend on UTC time (year, doy)
             %         - dependent on GPS time (week, day of week, h of the day)
 
-            if nargin == 4
+            if nargin < 5
                 session_list = '0';
                 session_start = '0';
                 session_stop = '0';
+            end
+            if nargin < 8
+                vmf_res = '';
+                vmf_source = '';
             end
             session = ~isempty(strfind(file_name, this.GPS_SESSION));
             sss_start = strfind(session_list, session_start);
@@ -170,8 +188,9 @@ classdef File_Name_Processor < handle
             if (step_sec > 0)
                 file_name_lst = {};
                 date_list = date_start.getCopy();
-                date0 = GPS_Time((floor(((date_start.getMatlabTime() - GPS_Time.GPS_ZERO) * 86400) / step_sec) * step_sec) / 86400 + GPS_Time.GPS_ZERO);
-                date1 = GPS_Time((floor(((date_stop.getMatlabTime() - GPS_Time.GPS_ZERO) * 86400) / step_sec) * step_sec) / 86400 + GPS_Time.GPS_ZERO);
+                date0 = GPS_Time((floor(((date_start.getNominalTime(0.5).getMatlabTime() - GPS_Time.GPS_ZERO) * 86400) / step_sec) * step_sec) / 86400 + GPS_Time.GPS_ZERO);
+                date0 = date0.getNominalTime(60);
+                date1 = date_stop.getNominalTime(1);
                 
                 date_list.toUnixTime(); % keep an higher precision
                 
@@ -182,15 +201,16 @@ classdef File_Name_Processor < handle
                         % run over session
                         for s = sss_start : length(session_list)
                             file_name_lst{i} = this.keyRep(file_name, this.GPS_SESSION, session_list(s)); %#ok<AGROW>
-                            file_name_lst{i} = this.dateKeyRep(file_name_lst{i}, date0); %#ok<AGROW>
+                            file_name_lst{i} = this.dateKeyRep(file_name_lst{i}, date0, '0',vmf_res,vmf_source); %#ok<AGROW>
                             i = i + 1;
                         end
                         sss_start = 1;
                     else
-                        file_name_lst{i} = this.dateKeyRep(file_name, date0); %#ok<AGROW>
+                        file_name_lst{i} = this.dateKeyRep(file_name, date0, '0', vmf_res,vmf_source); %#ok<AGROW>
                         i = i + 1;
                     end
                     date0.addIntSeconds(step_sec);
+                    date0 = date0.getNominalTime(60);
                     if (date0.getMatlabTime() <= date1.getMatlabTime())
                         date_list.append(date0);
                     end

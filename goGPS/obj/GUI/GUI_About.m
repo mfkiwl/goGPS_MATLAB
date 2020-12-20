@@ -2,7 +2,7 @@
 % =========================================================================
 %
 % DESCRIPTION
-%   class to manages the about window of goGPSz
+%   class to manage the about window of goGPSz
 %
 % EXAMPLE
 %   ui = GUI_About.getInstance();
@@ -15,7 +15,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini

@@ -15,7 +15,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
@@ -241,9 +241,10 @@ classdef Go_Slave < Com_Interface
                         core.initSimpleHandlers();
                         core.initLocalPath();
                         this.checkMsg([Parallel_Manager.BRD_STATE Parallel_Manager.ID], false, false); % WAIT WORK MESSAGE
-                        tmp = load(fullfile(this.getComDir, 'state.mat'), 'geoid', 'state', 'atx', 'cur_session', 'rin_list', 'met_list', 'slave_type');
+                        tmp = load(fullfile(this.getComDir, 'state.mat'), 'geoid', 'state', 'reference_frame', 'atx', 'cur_session', 'rin_list', 'met_list', 'slave_type');
                         this.slave_type = tmp.slave_type;
                         core.state = tmp.state; % load the state
+                        core.rf = tmp.reference_frame;
                         core.atx = tmp.atx;   % load the antenna manager
                         core.setCurrentSettings(tmp.state); % load the state
                         core.initGeoid(tmp.geoid); % load the geoid
@@ -272,13 +273,6 @@ classdef Go_Slave < Com_Interface
                         end
                         
                         % Check for receiver to load
-                        msg = this.checkMsg([Parallel_Manager.BRD_REC Parallel_Manager.ID], false, true, false); % CHECK REC PASSING MESSAGE
-                        rec_pass = [];
-                        if ~isempty(msg) && ~isnumeric(msg)
-                            % I received a rec_list to load
-                            rec_pass = load(fullfile(this.getComDir, 'rec_list.mat'), 'rec_info', 'rec_work', 'rec_out', 'id_target', 'id_work', 'id_out');
-                            this.log.addMarkedMessage('Passed receiver have been read');
-                        end
                         this.sendMsg(this.MSG_ACK, sprintf('Everything loaded'));
                         this.sendMsg(this.MSG_BORN, sprintf('Helo! My new name is "%s", gimme work', this.id));
                         
@@ -306,6 +300,13 @@ classdef Go_Slave < Com_Interface
                                     core.rec = rec;
                                     
                                     % Import pass receivers
+                                    msg = this.checkMsg([Parallel_Manager.BRD_REC Parallel_Manager.ID], false, true, false); % CHECK REC PASSING MESSAGE
+                                    rec_pass = [];
+                                    if ~isempty(msg) && ~isnumeric(msg)
+                                        % I received a rec_list to load
+                                        rec_pass = load(fullfile(this.getComDir, 'rec_list.mat'), 'rec_info', 'rec_work', 'rec_out', 'id_target', 'id_work', 'id_out');
+                                        this.log.addMarkedMessage('Passed receiver have been read');
+                                    end
                                     if ~isempty(rec_pass)
                                         for r = 1 : numel(rec_pass.rec_info)
                                             filed_names = fieldnames(rec_pass.rec_info(r));
@@ -353,6 +354,10 @@ classdef Go_Slave < Com_Interface
                                             cmd_file.cmd_list{c} = strrep(cmd_file.cmd_list{c},'$', num2str(req_id));
                                         end
                                     end
+                                    % And PAR loops with FOR => PAR within a PAR is not supported
+                                    for c = 1 : numel(cmd_file.cmd_list)
+                                        cmd_file.cmd_list{c} = strrep(cmd_file.cmd_list{c},'PAR', 'FOR');
+                                    end
                                     
                                     if this.isSessionWorker()
                                         core.state.setCurSession(req_id);
@@ -370,6 +375,7 @@ classdef Go_Slave < Com_Interface
                                         % Export work
                                         rec = core.rec(req_id);
                                         rec.out = []; % do not want to save out
+                                        
                                         save(fullfile(this.getComDir, sprintf('job%04d_%s.mat', req_id, this.id)), 'rec');
                                     elseif this.isSessionWorker()
                                         % Export all the rec work spaces of the session
@@ -379,6 +385,42 @@ classdef Go_Slave < Com_Interface
                                             rec(r).out = []; % do not want to save out
                                             rec(r).clearHandles(); % do not want to save handles
                                             rec(r).work.clearHandles(); % do not want to save handles
+                                            
+                                            % Clear what is not needed
+                                            if not(core.state.flag_out_dt)
+                                                rec(r).work.dt = [];
+                                                rec(r).work.desync = [];
+                                                rec(r).work.dt_ip = [];
+                                                rec(r).work.dt_ph = [];
+                                                rec(r).work.dt_pr = [];
+                                            end
+                                            if not(core.state.flag_out_apr_tropo)
+                                                rec(r).work.apr_zhd = [];
+                                                rec(r).work.apr_zwd = [];
+                                            end
+                                            if not(core.state.flag_out_ztd)
+                                                rec(r).work.ztd = [];
+                                            end
+                                            if not(core.state.flag_out_zwd)
+                                                rec(r).work.zwd = [];
+                                            end
+                                            if not(core.state.flag_out_pwv)
+                                                rec(r).work.pwv = [];
+                                            end
+                                            if not(core.state.flag_out_tropo_g)
+                                                rec(r).work.tgn = [];
+                                                rec(r).work.tge = [];
+                                            end
+                                            if not(core.state.isResOut)
+                                                rec(r).work.sat.res = Residuals();
+                                            end
+                                            if not(core.state.flag_out_azel)
+                                                rec(r).work.sat.az = [];
+                                                rec(r).work.sat.el = [];
+                                            end
+                                            if not(core.state.flag_out_quality)
+                                                rec(r).work.sat.quality = [];
+                                            end
                                         end
                                         atmo = Core.getAtmosphere;
                                         save(fullfile(this.getComDir, sprintf('job%04d_%s.mat', req_id, this.id)), 'rec', 'atmo');

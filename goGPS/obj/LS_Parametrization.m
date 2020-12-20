@@ -17,7 +17,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
@@ -80,7 +80,7 @@ classdef LS_Parametrization < handle
     end
     
     properties
-        % paramterization [(time paramterization) (rec paramterization) (sat paramterization) (tracking paramterization)]
+        % parametrization [(time parametrization) (rec parametrization) (sat parametrization) (tracking parametrization)]
         rec_x = [LS_Parametrization.CONST LS_Parametrization.SING_REC LS_Parametrization.ALL_SAT LS_Parametrization.ALL_FREQ];
         rec_y = [LS_Parametrization.CONST LS_Parametrization.SING_REC LS_Parametrization.ALL_SAT LS_Parametrization.ALL_FREQ];
         rec_z = [LS_Parametrization.CONST LS_Parametrization.SING_REC LS_Parametrization.ALL_SAT LS_Parametrization.ALL_FREQ];
@@ -94,8 +94,6 @@ classdef LS_Parametrization < handle
         rec_eb_lin = [LS_Parametrization.CONST      LS_Parametrization.SING_REC LS_Parametrization.ALL_SAT LS_Parametrization.RULE];
         rec_ebfr = [LS_Parametrization.SPLINE_CUB LS_Parametrization.SING_REC LS_Parametrization.ALL_SAT LS_Parametrization.SING_BAND];
 
-
-        
         sat_eb =   [LS_Parametrization.CONST      LS_Parametrization.ALL_REC LS_Parametrization.SING_SAT LS_Parametrization.SING_TRACK];
         sat_ppb =  [LS_Parametrization.STEP_CONST LS_Parametrization.ALL_REC LS_Parametrization.SING_SAT LS_Parametrization.RULE];
         sat_ebfr = [LS_Parametrization.SPLINE_CUB LS_Parametrization.ALL_REC LS_Parametrization.SING_SAT LS_Parametrization.SING_BAND];

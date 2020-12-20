@@ -21,7 +21,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2020 Andrea Gatti, Giulio Tagliaferro, Eugenio Realini
@@ -249,12 +249,16 @@ classdef Settings_Interface < Exportable
                     log = Core.getLogger();
                     if check_existence > 1 || ~empty_is_valid
                         if iscell(checked_val)
-                            log.addWarning(sprintf('The value "%s" of the settings field %s is not valid => using default: "%s"', iif(isempty(field_val), '<empty>', field_val), field_name, Ini_Manager.strCell2Str(checked_val)));
+                            log.addWarning(sprintf('The value "%s" of the settings field %s is not valid => using default: "%s"', iif(isempty(field_val), 'empty', field_val), field_name, Ini_Manager.strCell2Str(checked_val)));
                         else
-                            log.addWarning(sprintf('The value "%s" of the settings field %s is not valid => using default: "%s"', iif(isempty(field_val), '<empty>', field_val), field_name, checked_val));
+                            log.addWarning(sprintf('The value "%s" of the settings field %s is not valid => using default: "%s"', iif(isempty(field_val), 'empty', field_val), field_name, checked_val));
                         end
                     else
-                        log.addWarning(sprintf('The value "%s" of the settings field %s is not valid!!!', iif(isempty(field_val), '<empty>', field_val), field_name));
+                        if empty_is_valid
+                            checked_val = field_val;
+                        else
+                            log.addWarning(sprintf('The value "%s" of the settings field %s is not valid!!!', iif(isempty(field_val), 'empty', field_val), field_name));
+                        end
                     end
                 end
             end

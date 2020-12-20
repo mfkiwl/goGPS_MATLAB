@@ -1,17 +1,17 @@
 function N = getOrthometricCorr(phi, lam, geoid, method)
-
 % SYNTAX:
 %   N = getOrthometricCorr(phi, lam, geoid);
 %
 % EXAMPLE:
-%   core = Core.getInstance;
-%   core.initGeoid();
-%   getOrthometricCorr(45.69 ./ 180*pi, 9.03 ./ 180*pi, gs.getRefGeoid())
-%   % answer should be 46.1767008
+%   geoid = Core.getRefGeoid();
+%   getOrthometricCorr(45.69 ./ 180*pi, 9.03 ./ 180*pi, geoid, 'legacy')
+%   % or
+%   getOrthometricCorr(45.69, 9.03, geoid, 'grid')
+%   % answer should be 46.1837532
 %
 % INPUT:
-%   phi     = geocentric latitude                [deg (rad for legacy method)]
-%   lam     = geocentric longitude               [deg (rad for legacy method)]
+%   phi     = geodetic latitude                [deg (rad for legacy method)]
+%   lam     = geodetic longitude               [deg (rad for legacy method)]
 %   geoid   = regular map in geocentric coordinates <default = EGM08 0.5x0.5 deg>
 %   method  = interpolation approach:
 %              - legacy
@@ -32,12 +32,12 @@ function N = getOrthometricCorr(phi, lam, geoid, method)
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
-%  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
+%  Copyright (C) 2020 Andrea Gatti
 %  Written by:       Andrea Gatti
-%  Contributors:     Andrea Gatti, ...
+%  Contributors:     Andrea Gatti, Daniele Sampietro
 %  A list of all the historical goGPS contributors is in CREDITS.nfo
 %--------------------------------------------------------------------------
 %

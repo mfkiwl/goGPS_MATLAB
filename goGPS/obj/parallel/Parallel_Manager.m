@@ -20,7 +20,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
@@ -334,6 +334,10 @@ classdef Parallel_Manager < Com_Interface
             if nargin < 1 || isempty(flag_send_sky)
                 flag_send_sky = true;
             end
+            warning off;
+            delete(fullfile(this.getComDir, 'rec_list.mat'));
+            delete(fullfile(this.getComDir, 's*.mat'));
+            warning on;
             this.deleteMsg('*'); % delete all master massages
             this.deleteMsg(Go_Slave.MSG_DIE, true);
             this.deleteMsg(Go_Slave.MSG_ACK, true);
@@ -393,10 +397,10 @@ classdef Parallel_Manager < Com_Interface
                     this.sendSkyData();
                 end
                 n_workers = this.waitForWorkerAck(n_workers);
-                this.deleteMsg('*');
+                this.deleteMsg(Parallel_Manager.BRD_SKY);
+                this.deleteMsg(Parallel_Manager.BRD_STATE);
                 this.deleteMsg([Go_Slave.MSG_ACK, Go_Slave.SLAVE_READY_PREFIX, slave_type '*'], true);
                 delete(fullfile(this.getComDir, 's*.mat'));
-                delete(fullfile(this.getComDir, 'rec_list.mat'));
             end
             this.log.addMarkedMessage(sprintf('Parallel init took %.3f seconds', toc(t0)));
         end
@@ -469,6 +473,8 @@ classdef Parallel_Manager < Com_Interface
                 Core.getLogger.addError('All workers has been lost. Stopping parallel execution');
             end
             delete(fullfile(this.getComDir, 'cmd_list.mat'));
+            this.deleteMsg(Parallel_Manager.BRD_REC);
+            delete(fullfile(this.getComDir, 'rec_list.mat'));
             this.sendMsg(this.MSG_RESTART, 'My slaves, your job is done!\n        > There is no time for resting!\n        > Wait for other jobs!');
         end
         
@@ -506,7 +512,7 @@ classdef Parallel_Manager < Com_Interface
                     try
                         tmp = load(fullfile(this.getComDir, sss_file(s).name));
                     catch
-                        log.addWarning(sprintf('Fils %s seems corrupted', sss_file(s).name));
+                        log.addWarning(sprintf('File %s seems corrupted', sss_file(s).name));
                         not_corrupted = false;
                     end
                     if not_corrupted
@@ -515,7 +521,8 @@ classdef Parallel_Manager < Com_Interface
                         if isfield(tmp, 'rec') && (numel(tmp.rec) == n_rec) && isfield(tmp, 'atmo')
                             % Import atmosphere as computed by rec
                             core.setAtmosphere(tmp.atmo);
-                            log.addMessage(log.indent(sprintf('Importing session %d computed by worker %d', sss_id, w_id)));
+                            log.addMessage(log.indent(sprintf('%s - Importing session %d of %d computed by worker %d', GPS_Time.now.toString('HH:MM:SS'), sss_id, numel(sss_file), w_id)));
+                            drawnow;
                             for r = 1 : n_rec
                                 if core.rec(r).isEmpty
                                     % The first time (computed session) import the entire object
@@ -648,7 +655,7 @@ classdef Parallel_Manager < Com_Interface
             %   this.sendCommandList()
             %
             
-            % Save state on file
+            % Save command list on file
             state = Core.getCurrentSettings();
             save(fullfile(this.getComDir, 'cmd_list.mat'), 'cmd_list');
             this.sendMsg(this.BRD_CMD, 'Broadcast state');
@@ -670,8 +677,9 @@ classdef Parallel_Manager < Com_Interface
             state = Core.getCurrentSettings();
             atx = Core.getAntennaManager();
             cur_session = Core.getCurrentSession();
+            reference_frame = Core.getReferenceFrame();
             [rin_list, met_list] = Core.getRinLists();
-            save(fullfile(this.getComDir, 'state.mat'), 'geoid', 'state', 'atx', 'cur_session', 'rin_list', 'met_list', 'slave_type');
+            save(fullfile(this.getComDir, 'state.mat'), 'geoid', 'state', 'reference_frame', 'atx', 'cur_session', 'rin_list', 'met_list', 'slave_type');
             this.sendMsg(this.BRD_STATE, 'Broadcast state');
         end
         
@@ -852,11 +860,14 @@ classdef Parallel_Manager < Com_Interface
                                         % try to read it again
                                         tmp = load(fullfile(this.getComDir(), job_file(1).name));
                                     end
-                                    s0 = tmp.rec.work.sat.res.getStd();
+                                    s0 = tmp.rec(1).work.quality_info.s0;
+                                    if isempty(s0)
+                                        s0 = tmp.rec(1).work.quality_info.s0_ip;
+                                    end
                                     if s0 * 1e2 > 2
-                                        this.log.addWarning(sprintf('s0 = %.3f of the residuals for parallel job %d (session %d)', s0, job_id, tmp.rec.state.getCurSession()));
+                                        this.log.addWarning(sprintf('s0 = %.3f of the residuals for parallel job %d (session %d)', s0, job_id, Core.getState.getCurSession()));
                                     else
-                                        this.log.addMessage(this.log.indent(sprintf('job %d residuals s0 = %.3f from parallel execution (session %d)', job_id, s0, tmp.rec.state.getCurSession), 9));
+                                        this.log.addMessage(this.log.indent(sprintf('job %d residuals s0 = %.3f from parallel execution (session %d)', job_id, s0, Core.getState.getCurSession), 9));
                                     end
                                     if core.rec(job_id).out.isEmpty
                                         % import all
@@ -878,7 +889,6 @@ classdef Parallel_Manager < Com_Interface
                                         core.rec(job_id).out.initHandles();
                                         % relink singletons
                                         core.rec(job_id).log = Core.getLogger;
-                                        core.rec(job_id).state = Core.getState;
                                         % import results in out
                                     else
                                         % import only work
@@ -907,19 +917,21 @@ classdef Parallel_Manager < Com_Interface
                     % check if executiong time has not passed max time
                     % (sometimes a parallel job die without notice)
                     for w = 1:length(worker2jobstart)
-                        if ~ismember(worker2job(w),completed_job)
-                            if toc(worker2jobstart(w)) > Core.getCurrentSettings.getMaxExecutionTimePar()
-                                completed_job = [completed_job; worker2job(w)]; %#ok<AGROW>
-                                this.log.addWarning(sprintf('Worker %d is taking too long to complete, signaling job %d as complete, results will be missing',w, numel(completed_job)));
-                                this.log.addWarning(sprintf('Removing worker %d from workers'' pool',w));
-                                n_job_done = n_job_done +1;
+                        if worker2jobstart(w) > 0
+                            if ~ismember(worker2job(w),completed_job)
+                                if toc(worker2jobstart(w)) > Core.getCurrentSettings.getMaxExecutionTimePar()
+                                    completed_job = [completed_job; worker2job(w)]; %#ok<AGROW>
+                                    this.log.addWarning(sprintf('Worker %d is taking too long to complete, signaling job %d as complete, results will be missing',w, numel(completed_job)));
+                                    this.log.addWarning(sprintf('Removing worker %d from workers'' pool',w));
+                                    n_job_done = n_job_done +1;
+                                end
                             end
                         end
                     end
                 end
                 
                 active_jobs = active_jobs - n_job_done;
-                this.log.addMarkedMessage(sprintf('%d jobs completed', numel(completed_job)));
+                this.log.addMarkedMessage(sprintf('%d jobs completed @ %s', numel(completed_job), GPS_Time.now.toString('yyyy-mm-dd HH:MM:SS')));
                 this.deleteMsg([Go_Slave.MSG_ACK, Go_Slave.SLAVE_READY_PREFIX '*'], true);
             end
         end

@@ -2,4 +2,4 @@
 addPathGoGPS
 log = Core.getLogger();
 log.setOutMode(0,[],1);
-GUI_Inspector.getInstance
+GUI_Inspector.getInstance;

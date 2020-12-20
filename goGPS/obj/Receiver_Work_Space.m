@@ -14,7 +14,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
@@ -38,6 +38,12 @@
 %--------------------------------------------------------------------------
 classdef Receiver_Work_Space < Receiver_Commons
     %% CONSTANTS
+    properties (Constant)
+        NEW_ISP = true;
+        DT_CORRECTION_TIME_DESYNC = false;
+        NEW_OUT_DET = true;
+        CS_REPAIR = false;
+    end
     
     % ==================================================================================================================================================
     %% PROPERTIES RECEIVER
@@ -99,6 +105,7 @@ classdef Receiver_Work_Space < Receiver_Commons
         pp_status = false;         % flag is pre-proccesed / not pre-processed
         iono_status           = 0; % flag to indicate if measurements ahave been corrected by an external ionpheric model
         group_delay_status    = 0; % flag to indicate if code measurement have been corrected using group delays                          (0: not corrected , 1: corrected)
+        group_delay_status_new    = 0; % flag to indicate if code measurement have been corrected using group delays                          (0: not corrected , 1: corrected)
         dts_delay_status      = 0; % flag to indicate if code and phase measurement have been corrected for the clock of the satellite    (0: not corrected , 1: corrected)
         sh_delay_status       = 0; % flag to indicate if code and phase measurement have been corrected for shapiro delay                 (0: not corrected , 1: corrected)
         pcv_delay_status      = 0; % flag to indicate if code and phase measurement have been corrected for pcv variations                (0: not corrected , 1: corrected)
@@ -217,6 +224,7 @@ classdef Receiver_Work_Space < Receiver_Commons
             
             this.pp_status = false;
             this.group_delay_status = 0; % flag to indicate if code measurement have been corrected using group delays                          (0: not corrected , 1: corrected)
+            this.group_delay_status_new = 0; % flag to indicate if code measurement have been corrected using group delays                          (0: not corrected , 1: corrected)
             this.dts_delay_status   = 0; % flag to indicate if code and phase measurement have been corrected for the clock of the satellite    (0: not corrected , 1: corrected)
             this.sh_delay_status    = 0; % flag to indicate if code and phase measurement have been corrected for shapiro delay                 (0: not corrected , 1: corrected)
             this.pcv_delay_status   = 0; % flag to indicate if code and phase measurement have been corrected for pcv variations                (0: not corrected , 1: corrected)
@@ -331,6 +339,7 @@ classdef Receiver_Work_Space < Receiver_Commons
                 
                 this.iono_status = false;
                 this.group_delay_status = false;
+                this.group_delay_status_new = false;
                 this.dts_delay_status = false;
                 this.sh_delay_status = false;
                 this.pcv_delay_status = false;
@@ -477,17 +486,6 @@ classdef Receiver_Work_Space < Receiver_Commons
                 end
                 this.importAntModel();
             end
-            rf = Core.getReferenceFrame(true);
-            if (this.getTime.isEmpty)
-                coo = [];
-                std_pup = [];
-            else
-                [coo, status, std_pup] = rf.getCoo(this.parent.getMarkerName4Ch, this.getCentralTime);
-            end
-            if ~isempty(coo)
-                this.xyz = coo;
-                this.std_pup = std_pup;
-            end
         end
         
         function prepareAppending(this, time_start, time_stop)
@@ -528,6 +526,8 @@ classdef Receiver_Work_Space < Receiver_Commons
             if n_files == 0
                 Core.getLogger.addWarning('No RINEX files to import are available');
             else
+                tmp = char(uint8(rin_list.is_valid_list) + 32); tmp(tmp==33) = '*';
+                Core.getLogger.addMessage(sprintf('Checking file presence |%s|', tmp));
                 for i = 1 : n_files
                     tmp = time_stop.getCopy;
                     if tmp > rin_list.last_epoch.getEpoch(i)
@@ -537,6 +537,18 @@ classdef Receiver_Work_Space < Receiver_Commons
                     rin.copyFrom(rin_list, i);
                     this.appendRinex(rin, time_start, time_stop, rate, sys_c_list, otype_list)
                 end
+            end
+            
+            if (this.time.isEmpty)
+                coo = [];
+                std_pup = [];
+            else
+                rf = Core.getReferenceFrame();
+                [coo, status, std_pup] = rf.getCoo(this.parent.getMarkerName4Ch, this.getCentralTime);
+            end
+            if ~isempty(coo)
+                this.xyz = coo;
+                this.std_pup = std_pup;
             end
         end
         
@@ -1045,7 +1057,7 @@ classdef Receiver_Work_Space < Receiver_Commons
                 idx_v_el = A_idx ~= 0;
                 rows = repmat((1:size(A,1))',1,3);
                 A = sparse(rows(idx_v_el), A_idx(idx_v_el), A(idx_v_el), n_obs_s+n_i-1, max(max(A_idx(:,2:3))));
-                A(:,max(noZero(A_idx(:,2)))+[find(u_o_code_s == rdc_n(1)) find(u_o_code_s == rdc_n(2))]) = []; % fix the rankk deficency eleimtaing the bias for the first two pseudoranges
+                A(:,max(noZero(A_idx(:,2)))+[find(u_o_code_s == rdc_n(1)) find(u_o_code_s == rdc_n(2))]) = []; % fix the rank deficency eleimtaing the bias for the first two pseudoranges
                 x = A\obs;
                 res = obs - A*x;
                 stec(is_valid,i) = x(unique(A_idx(:,2)));
@@ -1438,6 +1450,70 @@ classdef Receiver_Work_Space < Receiver_Commons
             log.addMessage(log.indent(sprintf(' - %d code observations marked as outlier',n_out)));
         end
         
+        function remInitialBadPr(this, max_thr)
+            % Check the difference between pseudo-ranges (pr) and synthetised ranges
+            % Remove pr too far from expected
+            % (there are probably problems with orbits or a-priori coordinates)
+            %
+            % The cut-off threshold is automatically computed as 5*median(sigma)
+            %
+            % INPUT
+            %   max_thr     maximum accepted threshold to discard data
+            %
+            %
+            % SYNTAX
+            %   this.remInitialBadPr(max_thr)
+            if nargin == 1
+                max_thr = 50;
+            end
+            min_thr = 20;
+            
+            try
+                % get synthetic
+                prs = this.getSyntPrObs();
+                % get pseudo-ranges
+                [pr, id_pr] = this.getPseudoRanges();
+                
+                % get difference
+                pr_diff = zero2nan(pr)-zero2nan(prs);
+                
+                % reduce with the median value
+                pr_diff = bsxfun(@minus, pr_diff, median(pr_diff, 2, 'omitnan'));
+                %
+                pr_diff = movmedian(pr_diff, 11, 'omitnan');
+                
+                % DEBUG
+                % figure; plot(pr_diff)
+                
+                % auto find thr (5 sigma or 50 meters)
+                sigma = median(std(pr_diff', 'omitnan'), 'omitnan'); %#ok<UDIM>
+                thr = max(min_thr, min(max_thr, 5 * sigma));
+                id_ko = abs(pr_diff) > thr;
+                id_ko = flagExpand(id_ko, 5) & not(isnan(pr_diff)); % add some margin to the bad epochs
+                
+                % DEBUG
+                % pr_diff(id_ko) = nan;
+                % hold on; plotSep(pr_diff, '.-k', 'LineWidth', 2);
+            catch
+                id_ko = [];
+            end
+            
+            if sum(id_ko(:)) > 0
+                log = Core.getLogger();
+                msg = sprintf('Using a-priori coordinates %d observations in %d epochs have been found invalid\n', sum(id_ko(:)), sum(any(id_ko')));
+                msg = sprintf('%sRemoving %.2f %% of observations and %.2f %% of total epochs (pseudo-ranges)', msg, ...
+                    sum(id_ko(:)) / sum(not(isnan(pr_diff(:)))) * 100, ...
+                    sum(all((id_ko | isnan(pr_diff))')) / size(id_ko, 1) * 100);
+                
+                log.addWarning(msg);
+                
+                pr(id_ko) = nan;
+                this.setPseudoRanges(pr, id_pr);
+            end
+        end
+        
+        
+        
         function [obs, sys, prn, flag] = remUndCutOff(this, obs, sys, prn, flag, cut_off)
             %  remove obs under cut off
             for i = 1 : length(prn)
@@ -1525,8 +1601,9 @@ classdef Receiver_Work_Space < Receiver_Commons
                         is = st_idx(i);
                         ie = end_idx(i);
                         c_rate = cs.coord_rate;
-                        bad_ep_st = min(this.time.length,max(1, floor((-coord_ref_time_diff + is * c_rate - c_rate * 11)/this.getRate())-1));
-                        bad_ep_en = max(1,min(this.time.length, ceil((-coord_ref_time_diff + ie * c_rate + c_rate * 11)/this.getRate())+1));
+                        % Delete observations that are within the end of an orbit to avoid bad polynomial interpolation
+                        bad_ep_st = min(this.time.length+1,max(1, floor((-coord_ref_time_diff + is * c_rate - c_rate * 0)/this.getRate())-1));
+                        bad_ep_en = max(0,min(this.time.length, ceil((-coord_ref_time_diff + ie * c_rate + c_rate * 0)/this.getRate())+1));
                         this.obs(o_idx , bad_ep_st : bad_ep_en) = 0;
                     end
                 else
@@ -1565,8 +1642,8 @@ classdef Receiver_Work_Space < Receiver_Commons
                                 is = st_idx(i);
                                 ie = end_idx(i);
                                 c_rate = cs.clock_rate;
-                                bad_ep_st = min(this.time.length,max(1, floor((-clock_ref_time_diff + is*c_rate - c_rate * 1)/this.time.getRate())));
-                                bad_ep_en = max(1,min(this.time.length, ceil((-clock_ref_time_diff + ie*c_rate + c_rate * 1)/this.time.getRate())));
+                                bad_ep_st = min(this.time.length+1,max(1, floor((-clock_ref_time_diff + is*c_rate)/this.time.getRate())));
+                                bad_ep_en = max(0,min(this.time.length, ceil((-clock_ref_time_diff + ie*c_rate)/this.time.getRate())));
                                 this.obs(o_idx , bad_ep_st : bad_ep_en) = 0;
                             end
                         else
@@ -1586,6 +1663,14 @@ classdef Receiver_Work_Space < Receiver_Commons
                 else
                     log.addWarning(sprintf('Satellites with missing clocks: %s\nRemember to process them only in network mode\n', sat_nan_clock(3:end)));
                 end
+            end
+            pm_clock = sum(all(nan_clock,2)) / size(nan_clock, 1) * 100;
+            pm_coord = sum(all(nan_coord,2)) / size(nan_coord, 1) * 100;
+            if pm_clock > 0
+                log.addWarning(sprintf('%.2f %% of the epochs of these orbits have missing coordinates', pm_coord));
+            end
+            if pm_clock > 0
+                log.addWarning(sprintf('%.2f %% of the epochs of these orbits have missing clocks', pm_clock));
             end
             
             % remove moon midnight or shadow crossing epoch
@@ -1632,7 +1717,7 @@ classdef Receiver_Work_Space < Receiver_Commons
                     
                     id = 0;
                     if flag_debug
-                        for ff=100:106; figure(ff); clf; end
+                        for ff=100:106; set(0, 'CurrentFigure', ff); clf; end
                     end
                     % for each frequency
                     for f = sort(unique(ss_obs_code(:,2)'))
@@ -1790,24 +1875,60 @@ classdef Receiver_Work_Space < Receiver_Commons
             if min_arc > 1
                 log = Core.getLogger;
                 log.addMarkedMessage(sprintf('Removing arcs shorter than %d epochs', 1 + 2 * ceil((min_arc - 1)/2)));
-                
-                [pr, id_pr] = this.getPseudoRanges();
-                idx = ~isnan(pr);
-                idx_s = flagShrink(idx, ceil((min_arc - 1)/2));
-                idx_e = flagExpand(idx_s, ceil((min_arc - 1)/2));
-                el_idx = xor(idx,idx_e);
-                pr(el_idx) = NaN;
-                this.setPseudoRanges(pr, id_pr);
-                log.addMessage(log.indent(sprintf(' - %d code observations have been removed', sum(el_idx(:)))));
-                
+               
+                n_el = 0;
                 [ph, wl, id_ph] = this.getPhases();
-                idx = ~isnan(ph);
-                idx_s = flagShrink(idx, ceil((min_arc - 1)/2));
-                idx_e = flagExpand(idx_s, ceil((min_arc - 1)/2));
-                el_idx = xor(idx,idx_e);
-                ph(el_idx) = NaN;
+                if ~isempty(this.sat.cycle_slip_ph_by_ph)
+                    idx = ~(isnan(ph) | this.sat.cycle_slip_ph_by_ph);
+                    idx_s = flagShrink(idx, ceil((min_arc - 1)/2));
+                    idx_e = flagExpand(idx_s, ceil((min_arc - 1)/2));
+                    el_idx = xor(idx,idx_e);
+                    ph(el_idx) = NaN;
+                    n_el = n_el + sum(el_idx(:));
+                    % check last epoch
+                    n_el = n_el + sum(this.sat.cycle_slip_ph_by_ph(end,:));
+                    ph(end,this.sat.cycle_slip_ph_by_ph(end,:)) = nan;
+                    this.sat.cycle_slip_ph_by_ph(end,this.sat.cycle_slip_ph_by_ph(end,:)) = false;
+                    % remove arc less than min arc
+                    idx_m =  this.sat.cycle_slip_ph_by_ph;
+                    for s = 1: size(ph,2)
+                         c = find(idx_m(:,s))';
+                         for i = 1 : numel(c)
+                             e = c(i);
+                             if i < numel(c)
+                                 next_arc_begin = c(i+1);
+                             else
+                                 next_arc_begin = size(ph, 1);
+                             end
+                             fa = find(isnan(ph((e+1):end,s)),1,'first');
+                             if fa < min_arc
+                                 ph(e:(e+fa-1),s) = nan;
+                                 n_el = n_el + fa;
+                                 % Move the cycle slip at the beginning of the next arc (if present)
+                                 if this.sat.cycle_slip_ph_by_ph(e,s)
+                                     next_arc_begin = (e + fa - 1) + find(~isnan(ph((e+fa):next_arc_begin,s)), 1, 'first');
+                                     this.sat.cycle_slip_ph_by_ph(next_arc_begin, s) = true;
+                                 end
+                                 this.sat.cycle_slip_ph_by_ph(e,s) = false;
+                             end
+                         end
+                    end
+                end
                 this.setPhases(ph, wl, id_ph);
-                log.addMessage(log.indent(sprintf(' - %d phase observations have been removed', sum(el_idx(:)))));
+                log.addMessage(log.indent(sprintf(' - %d phase observations have been removed', n_el)));
+                % move cycle slip which epoch have been eliminated
+                if ~isempty(this.sat.cycle_slip_ph_by_ph)
+                    idx_m = isnan(ph) & this.sat.cycle_slip_ph_by_ph;
+                    for s = 1: size(ph,2)
+                        for c = find(idx_m(:,s))'
+                            fa = find(~isnan(ph((c+1):end,s)),1,'first');
+                            this.sat.cycle_slip_ph_by_ph(c,s) = false;
+                            if ~isempty(fa)
+                                this.sat.cycle_slip_ph_by_ph(c+fa,s) = true;
+                            end
+                        end
+                    end
+                end
             end
         end
         
@@ -1844,26 +1965,36 @@ classdef Receiver_Work_Space < Receiver_Commons
             end
         end
         
-        function combinePhTrackings(this)
+        function status = combinePhTrackings(this)
             % This function combines different phase trackings
             % to get a unique tracking with repaired CS
             %
+            % OUTPUT
+            %   status  return 0 if no trackings have been combined
             % SYNTAX
-            %   this.combinePhTrackings()
+            %   status = this.combinePhTrackings()
             
             % Remove step
             % Estimate rough clock
+            status = 0;
             log = Core.getLogger;
             log.addMarkedMessage('Combining trackings');
-            [ph, ~, id_ph] = this.getPhases;
+            [ph, ~, id_ph0] = this.getPhases;
             n_obs = size(ph,1);
             phs = this.getSyntPhases();
-            clk0 = detrend(cumsum(nan2zero(median(Core_Utils.diffAndPred(ph-phs), 2, 'omitnan'))));
+            
+            % Basic estimation of residual clock to clean a bit the data
+            clk0 = (Core_Utils.diffAndPred(zero2nan(ph) - zero2nan(phs))); 
+            clk0(abs(clk0) > 3) = nan; % filter big cycle slips (or bad data)
+            clk0 = strongDeTrend(cumsum(nan2zero(median(zero2nan(clk0), 2, 'omitnan')))); 
             
             % Get all trackings available
             all_trk = Core_Utils.num2Code4Char(unique(Core_Utils.code4Char2Num(([this.system(this.obs_code(:,1)=='L')' this.obs_code(this.obs_code(:,1)=='L',:)]))));
             cc = Core.getConstellationCollector;
             i = 0;
+            
+            min_arc = ceil(Core.getState.getMinArc / this.time.getRate);
+                        
             % for each system
             for sys_c = unique(all_trk(:,1))'
                 sys = cc.getSys(sys_c);
@@ -1887,6 +2018,7 @@ classdef Receiver_Work_Space < Receiver_Commons
                         
                         % Extract residuals
                         res = nan(n_obs, cc.getMaxNumSat(sys_c), numel(trk_avail));
+                        n_sat = zeros(numel(trk_avail), 0);
                         for t = numel(trk_avail) : -1 : 1
                             trk = ['L' f trk_avail(t)];
                             % Get phase of the current tracking in meters
@@ -1904,9 +2036,21 @@ classdef Receiver_Work_Space < Receiver_Commons
                             
                             % residual difference in cycles
                             res(:, 1 + this.go_id(id_ph) - cc.getSys(sys_c).go_ids(1), t) =  zero2nan(ph - phs);
+                            n_sat(t) = sum(any(res(:,:,t)));
+                            id_ko = find(flagMergeArcs(isnan(res(:,:,t)), min_arc));
+                            res(id_ko + (t-1) * size(res,1) * size(res,2)) = nan;
                         end
+                        
+                        % Sort based on number iof satellite per classes
+                        [~, ido] = sort(discretize(n_sat, numel(trk_avail)), 'descend');
+                        res = res(:, :, ido);
+                        trk_avail = trk_avail(ido);
+                        
+                        % sort tracking channel based on number of satellites)
                         % Move all the trackings to the first one
                         for t = 2 : numel(trk_avail)
+                            status = status + 1;
+                            
                             % TRAKING BIAS REMOVAL
                             
                             % Hp 0
@@ -1918,52 +2062,61 @@ classdef Receiver_Work_Space < Receiver_Commons
                             % Hp 1
                             % I have different biases per satellite
                             % let's remove them on the least precise trackings
-                            trk_bia = median(round(median((res(:,:,t) - res(:,:,1) - round(res(:,:,t) - res(:,:,1))), 'omitnan') * 4) / 4, 'omitnan');
-                            trk_bia = nan2zero(round(median((res(:,:,t) - res(:,:,1) - round(res(:,:,t) - res(:,:,1))) - trk_bia, 'omitnan'), 4)) + trk_bia;
-                            res(:, :, t) = bsxfun(@minus, zero2nan(res(:, :, t)), trk_bia);
-                            
-                            % Merge arc by arc to detect outliers and cycle sleep
-                            for s = 1 : size(res,2)
-                                arc = getOutliers(~isnan(res(:, s, t)));
-                                for a = 1 : size(arc, 1)
-                                    id_arc = arc(a,1) : arc(a,2);
-                                    tmp = res(id_arc, s, 1);
-                                    corr = round(res(id_arc, s, t) - tmp);
-                                    % if the arc in ref is shorter than the arc to be merged in
-                                    if any(~isnan(corr))
-                                        if any(isnan(corr))
-                                            lim = getOutliers(~isnan(corr));
-                                            % fill beginning and end
-                                            tmp(1 : lim(1)) = tmp(lim(1));
-                                            tmp(lim(end) : end) = tmp(lim(end));
-                                            corr(1 : lim(1)) = corr(lim(1));
-                                            corr(lim(end) : end) = corr(lim(end));
-                                            % fill middle gaps by expanding the previous data
-                                            for l = 1 : size(lim, 1) - 1
-                                                tmp((lim(l,2) + 1) : (lim(l+1,1) - 1)) = tmp(lim(l,2));
-                                                corr((lim(l,2) + 1) : (lim(l+1,1) - 1)) = corr(lim(l,2));
-                                            end
-                                        end
-                                        cs_list = find(round([0; diff(corr)]) > 0);
-                                        if ~isempty(cs_list)
-                                            % for each cycle slip
-                                            for cs = cs_list(:)'
-                                                jmp_ref = round(diff(tmp(cs + -1:0)));
-                                                jmp_trk = round(diff(res(id_arc(cs + -1:0), s, t)));
-                                                if abs(jmp_trk) > abs(jmp_ref)
-                                                    % the merged tracking is jumping
-                                                    % correction is ok as it is
-                                                else
-                                                    % the reference tracking is jumping
-                                                    res(id_arc(cs):end, s, 1) = res(id_arc(cs):end, s, 1) + diff(corr(cs+[-1 0]));
-                                                    corr(cs : end) = corr(cs : end) - diff(corr(cs+[-1 0]));
+                            for t_ref = 1 : (numel(trk_avail)-1)
+                                if t ~= t_ref
+                                    trk_bia = median(round(median((res(:,:,t) - res(:,:,t_ref) - round(res(:,:,t) - res(:,:,t_ref))), 'omitnan') * 4) / 4, 'omitnan');
+                                    trk_bia = nan2zero(round(median((res(:,:,t) - res(:,:,t_ref)) - trk_bia, 'omitnan'), 4)) + trk_bia;
+                                    res(:, :, t) = bsxfun(@minus, zero2nan(res(:, :, t)), trk_bia);
+                                    
+                                    % Merge arc by arc to detect outliers and cycle sleep
+                                    for s = 1 : size(res,2)
+                                        arc = getOutliers(~isnan(res(:, s, t)));
+                                        for a = 1 : size(arc, 1)
+                                            id_arc = arc(a,1) : arc(a,2);
+                                            tmp = res(id_arc, s, t_ref);
+                                            corr = round(res(id_arc, s, t) - tmp);
+                                            % if the arc in ref is shorter than the arc to be merged in
+                                            if any(~isnan(corr))
+                                                if any(isnan(corr))
+                                                    lim = getOutliers(~isnan(corr));
+                                                    % fill beginning and end
+                                                    tmp(1 : lim(1)) = tmp(lim(1));
+                                                    tmp(lim(end) : end) = tmp(lim(end));
+                                                    corr(1 : lim(1)) = corr(lim(1));
+                                                    corr(lim(end) : end) = corr(lim(end));
+                                                    % fill middle gaps by expanding the previous data
+                                                    for l = 1 : size(lim, 1) - 1
+                                                        tmp((lim(l,2) + 1) : (lim(l+1,1) - 1)) = tmp(lim(l,2));
+                                                        corr((lim(l,2) + 1) : (lim(l+1,1) - 1)) = corr(lim(l,2));
+                                                    end
                                                 end
+                                                cs_list = find(round([0; diff(corr)]) > 0);
+                                                if ~isempty(cs_list)
+                                                    % for each cycle slip
+                                                    for cs = cs_list(:)'
+                                                        jmp_ref = round(diff(tmp(cs + -1:0)));
+                                                        jmp_trk = round(diff(res(id_arc(cs + -1:0), s, t)));
+                                                        if abs(jmp_trk) > abs(jmp_ref)
+                                                            % the merged tracking is jumping
+                                                            % correction is ok as it is
+                                                        else
+                                                            % the reference tracking is jumping
+                                                            res(id_arc(cs):end, s, t_ref) = res(id_arc(cs):end, s, t_ref) + diff(corr(cs+[-1 0]));
+                                                            corr(cs : end) = corr(cs : end) - diff(corr(cs+[-1 0]));
+                                                        end
+                                                    end
+                                                end
+                                                res(id_arc, s, t) = res(id_arc, s, t) - corr;
+                                                 % move all the arcs till the end - this limit the possibility to brake arcs
+                                                res((id_arc(end)+1) : end, s, t) = res((id_arc(end)+1) : end, s, t) - corr(end);
+                                            else
+                                                res(id_arc, s, t_ref) = res(id_arc, s, t);
                                             end
                                         end
-                                        res(id_arc, s, t) = res(id_arc, s, t) - corr;
                                     end
                                 end
                             end
+
                         end
                         el = (this.sat.el(:,cc.getSys(sys_c).go_ids));
                         % fh = figure();
@@ -2001,9 +2154,9 @@ classdef Receiver_Work_Space < Receiver_Commons
                                 %weight = weight*0 + 1;
                                 weight(id_ko) = 0;
                                 % for now keep only the data when the best tracking is available
-                                if any(~id_ko(:,1)) % unless only one of the trackings is actually seeing a satellite
-                                    weight(id_ko(:,1),2:end) = 0; % <= to be checked in the future
-                                end
+                                % if any(~id_ko(:,1)) % unless only one of the trackings is actually seeing a satellite
+                                %    weight(id_ko(:,1),2:end) = 0; % <= to be checked in the future
+                                % end
                                 
                                 weight = bsxfun(@rdivide, weight, sum(weight,2) + eps);
                                 % plot(squeeze(res(:,s,:)), 'o');
@@ -2048,7 +2201,11 @@ classdef Receiver_Work_Space < Receiver_Commons
             this.sat.outliers_ph_by_ph = false(size(this.sat.outliers_ph_by_ph));
             this.sat.cycle_slip_ph_by_ph = false(size(this.sat.cycle_slip_ph_by_ph));
             this.updateSyntPhases();
-            this.detectOutlierMarkCycleSlip();
+            if this.NEW_OUT_DET
+                this.detectOutlierMarkCycleSlipNew();
+            else
+                this.detectOutlierMarkCycleSlip();
+            end
         end
         
         function detectOutlierMarkCycleSlip(this, flag_rem_dt)
@@ -2131,7 +2288,7 @@ classdef Receiver_Work_Space < Receiver_Commons
             bad_id = find(arc_mean > max(0.001, median(movstd(sensor_ph0, 5), 'omitnan')));
             % This mean should be less than 10cm, otherwise the satellite have some very bad observations
             arc_std = abs(std(sensor_ph0,'omitnan'));
-            bad_id = [];%unique([bad_id find(arc_std > 12*median(serialize(movstd(sensor_ph0, 5)), 'omitnan'))]);
+            bad_id = unique([bad_id find(arc_std > 12*median(serialize(movstd(sensor_ph0, 5)), 'omitnan'))]);
             for i = 1 : numel(bad_id)
                 % analize current arc
                 sensor_tmp = sensor_ph(:, bad_id(i));
@@ -2440,11 +2597,360 @@ classdef Receiver_Work_Space < Receiver_Commons
             if any(id_ko)
                 n_out = sum(serialize(this.sat.outliers_ph_by_ph(id_ko, :)));
                 n_ko = sum(serialize(~isnan(ph(id_ko, :))));
-                log.addMessage(log.indent(sprintf('Adding other %d phase outliears due to missing valid pseudo-ranges', n_ko - n_out)));
+                if (n_ko - n_out) > 0
+                    log.addMessage(log.indent(sprintf('Adding other %d phase outliers due to missing valid pseudo-ranges', n_ko - n_out)));
+                end
                 this.sat.outliers_ph_by_ph(id_ko, :) = ~isnan(ph(id_ko, :));
             end
             
             log.addMessage(log.indent(sprintf(' - %d phase observations marked as outlier', n_out)));
+        end
+        
+        function pivot_sat = detectOutlierMarkCycleSlipNew(this)
+            % detectOutlierMarkCycleSlip
+            %
+            % SYNTAX
+            %   this.detectOutlierMarkCycleSlipNew        
+            
+            log = Core.getLogger;
+            cc = Core.getState.getConstellationCollector;
+            
+            log.addMarkedMessage('Cleaning observations');
+            %% PARAMETRS
+            cj_thr = 0.1; % candidate jumper std
+            ol_thr = 0.10; % 10cm
+            cs_thr = 0.7 * this.state.getCycleSlipThr(); % CYCLE SLIP THR
+            
+            %----------------------------
+            % Outlier Detection
+            %----------------------------
+            
+            % mark all as outlier and interpolate
+            % get observed values
+                        
+            this.sat.outliers_ph_by_ph = [];
+            [ph, wl, lid_ph] = this.getPhases;
+            wl = wl';
+            phs = this.getSyntPhases;
+            
+            % remove jumps (>0.5m) from discontinuities of the clock products
+            go_id = this.go_id(lid_ph);            
+            dts_range = zero2nan(this.getDtS(go_id)) * Core_Utils.V_LIGHT; % get satellites clocks
+            ddts = Core_Utils.diffAndPred(dts_range, 1);                   % get time derivate
+            ddts = (ddts - movmedian(ddts,3, 'omitnan'));                  % movmedian filter detect jumps
+            ddts(abs(ddts) < 0.5) = 0;                                     % Keep only jumps grater than 0.5 meters
+            phs = zero2nan(phs) + cumsum(nan2zero(ddts));                  % Adjust synthesised phases accordingly
+            
+            % initilize outlier and cycle splips
+            this.sat.outliers_ph_by_ph = false(size(ph));
+            this.sat.cycle_slip_ph_by_ph = false(size(ph));
+            
+            phr = zero2nan(ph) - zero2nan(phs);
+            n_epoch = size(phr,1);
+            n_strm = size(phr,2);
+            el = this.sat.el(:, this.go_id(lid_ph));
+            
+            pivot_sat = zeros(n_epoch, 1, 'uint8');
+            for e = 2 : (n_epoch - 2)
+                phr_t = phr((e-1) : (e+1), :);
+                n_pres_strm = sum(~isnan(phr_t(2,:)));
+                complete_triple = find(all(not(isnan(phr_t))));
+                if ~isempty(complete_triple)
+                    tmp_diff = Core_Utils.diffAndPred(phr_t(:,complete_triple));
+                    tmp_dt = cumsum(median(tmp_diff, 2));
+                    phr_t = bsxfun(@minus, phr_t, tmp_dt);
+                    candidate_jumper = std(phr_t(:, complete_triple)) > cj_thr;
+                    if (sum(candidate_jumper)/numel(complete_triple)) > 0.6 
+                        % if the number of the suspected jumper (aka CS) is more than the 60% of the total I have an anomaly
+                        % this check is added while processing GMU SL04 daily solution @ epoch 2020-11-12 20:55:30
+                        log.addWarning(sprintf('Anomaly found at epoch %s, clock jump?', this.time.getEpoch(e).toString('yyyy-mm-dd HH:MM:SS')));
+                        %this.sat.outliers_ph_by_ph(e,:) = true;
+                    end
+                    if not(all(candidate_jumper)) % this should always be true
+                        % consider only stable satellites
+                        complete_triple = complete_triple(not(candidate_jumper));
+                        %phr_t = bsxfun(@minus, phr_t, cumsum(mean(tmp_diff(:, not(candidate_jumper)), 2)) - tmp_dt);
+                    end
+                    %max el choose pivot
+                    [~,max_el_id] = max(el(e,complete_triple));
+                    
+                    sd_phr = phr_t - repmat(phr_t(:,complete_triple(max_el_id)),1,n_strm);
+                    wl_t = min(wl,wl(complete_triple(max_el_id)));
+                    td_phr = diff(sd_phr);
+                    [o_idx, cs_idx] = Receiver_Work_Space.outlierCyscleSlipDetect(td_phr, wl_t, ol_thr, cs_thr);
+                    if median(abs(noNaN(td_phr(:)))) > 0.1 || sum(o_idx | cs_idx) == n_pres_strm % pivot might be the outlier or cycle slip choose a new one
+                        [~,idx_el] = sort(el(e,complete_triple),'descend');
+                        for i = 2 : length(idx_el)
+                            max_el_id = idx_el(i);
+                            sd_phr = phr_t - repmat(phr_t(:,complete_triple(max_el_id)),1,n_strm);
+                            wl_t = min(wl,wl(complete_triple(max_el_id)));
+                            td_phr = diff(sd_phr);
+                            [o_idx, cs_idx] = Receiver_Work_Space.outlierCyscleSlipDetect(td_phr, wl_t, ol_thr, cs_thr);
+                            if ~(sum(o_idx | cs_idx) == n_pres_strm || median(abs(noNaN(td_phr(:)))) > 0.05) % we found a good pivot
+                                break
+                            end
+                        end
+                    end
+                    this.sat.outliers_ph_by_ph(e,o_idx) = true;
+                    this.sat.outliers_ph_by_ph(e,cs_idx) = false;
+                    this.sat.cycle_slip_ph_by_ph(e,cs_idx) = true;
+                    pivot_sat(e) = complete_triple(max_el_id);
+                end
+            end
+            phr(this.sat.outliers_ph_by_ph) = nan;
+            
+            % check first epoch
+            phr_t = phr(1:2, :);
+            n_pres_strm = sum(~isnan(phr_t(1,:)));
+            complete_triple = find(sum(isnan(phr_t)) == 0);
+            if ~isempty(complete_triple)
+                [~,max_el_id] = max(el(1,complete_triple));
+                sd_phr = phr_t - repmat(phr_t(:,complete_triple(max_el_id)),1,n_strm);
+                td_phr = diff(sd_phr);
+                o_idx = abs(td_phr) > ol_thr | (~isnan(sd_phr(1,:)) & isnan(sd_phr(2,:)));
+                if sum(o_idx) == n_pres_strm
+                    [~,idx_el] = sort(el(1, complete_triple),'descend');
+                    for i = 2 : lenght(idx_el)
+                        max_el_id = idx_el(i);
+                        sd_phr = phr_t - repmat(phr_t(:,complete_triple(max_el_id)),1,n_strm);
+                        td_phr = diff(sd_phr);
+                        o_idx = abs(td_phr) > ol_thr | (~isnan(sd_phr(1,:)) & isnan(sd_phr(2,:)));
+                        if ~(sum(o_idx) == n_pres_strm)
+                            break
+                        end
+                    end
+                end
+                this.sat.outliers_ph_by_ph(1,o_idx) = true;
+                phr(1,o_idx) = nan;
+                pivot_sat(1) = complete_triple(max_el_id);
+            end
+            
+            % check last epoch
+            phr_t = phr((end-1):end, :);
+            complete_triple = find(sum(isnan(phr_t)) == 0);
+            if ~isempty(complete_triple)
+                [~,max_el_id] = max(el(end,complete_triple));
+                n_pres_strm = sum(~isnan(phr_t(2,:)));
+                sd_phr = phr_t - repmat(phr_t(:,complete_triple(max_el_id)),1,n_strm);
+                td_phr = diff(sd_phr);
+                o_idx = abs(td_phr) > ol_thr | (isnan(sd_phr(1,:)) & ~isnan(sd_phr(2,:)));
+                if sum(o_idx) == n_pres_strm
+                    [~,idx_el] = sort(el(end, complete_triple),'descend');
+                    for i = 2 : lenght(idx_el)
+                        max_el_id = idx_el(i);
+                        sd_phr = phr_t - repmat(phr_t(:,complete_triple(max_el_id)),1,n_strm);
+                        td_phr = diff(sd_phr);
+                        o_idx = abs(td_phr) > ol_thr | (isnan(sd_phr(1,:)) & ~isnan(sd_phr(2,:)));
+                        if ~(sum(o_idx) == n_pres_strm)
+                            break
+                        end
+                    end
+                end
+                this.sat.outliers_ph_by_ph(end,o_idx) = true;
+                pivot_sat(end) = complete_triple(max_el_id);
+            end
+            
+            % check start of arc if there is a cycle slip
+            this.sat.cycle_slip_ph_by_ph(1,~isnan(phr(1,:))) = true; % first epoch if there is am observation put cs
+            max_hole_chk = 121; % if hole bigger than 2 min -> put cycle slip without check
+            max_ep_chk = round(max_hole_chk / this.getRate);
+            for s = 1 : n_strm
+                arc_start = 1 + find(diff(isnan(phr(:,s))) == -1);
+                if ~isempty(arc_start)
+                    this.sat.cycle_slip_ph_by_ph(arc_start(1),s) = true;
+                    for a = 2 : length(arc_start)
+                        as = arc_start(a);
+                        chk_obs = phr(max(1,as - max_ep_chk):(as-1),s);
+                        if any(chk_obs) % hole bigger than max treshold
+                            last_valid_ep = as - length(chk_obs) + find(~isnan(chk_obs),1,'last') -1;
+                            pivot_candidate = find(~isnan(phr(last_valid_ep,:)) & ~isnan(phr(as,:)) & ~this.sat.cycle_slip_ph_by_ph(as,:));
+                            if ~isempty(pivot_candidate)
+                                [~,max_el_id] = max(el(as,pivot_candidate));
+                                pv = pivot_candidate(max_el_id);
+                                try
+                                sens = diff(phr([last_valid_ep as],s) - phr([last_valid_ep as],pv));
+                                catch
+                                    keyboard
+                                end
+                                if abs(sens) > cs_thr * min(wl(s),wl(pv))
+                                    this.sat.cycle_slip_ph_by_ph(as,s) = true;
+                                end
+                            else
+                                this.sat.cycle_slip_ph_by_ph(as,s) = true;
+                            end
+                            
+                        else
+                            this.sat.cycle_slip_ph_by_ph(as,s) = true;
+                        end
+                    end
+                end
+            end
+            
+            if this.isMultiFreq % if the receiver is multifrequency there is the opportunity to check again the cycle slip using geometry free and Melbourne-Wubbena combinations
+                % NOTE: with multi-frequency and multi-tracking data
+                % numerous combinations are possible, this code try to find the
+                % "best" combination on the base of the wavelength of the
+                % signal and on the best tracking.
+                % A better approach capable to deal with all the information
+                % at once should be found
+                [ph,wl,lid_ph] = this.getPhases;
+                id_ph = find(lid_ph);
+                go_id_ph = this.go_id(lid_ph);
+                [pr,lid_pr] = this.getPseudoRanges;
+                id_pr = find(lid_pr);
+                go_id_pr = this.go_id(lid_pr);
+                for g = unique(go_id_ph)'
+                    % for each sat get all available observations and get
+                    % cycle slips
+                    id_sat_ph = find(go_id_ph == g);
+                    ph_sat = ph(:,id_sat_ph);
+                    wl_sat = wl(id_sat_ph);
+                    ph_sat_code = this.obs_code(id_ph(id_sat_ph),:);
+                    u_fr_ph = unique(ph_sat_code(:,2));
+                    n_fr_ph = zeros(size(u_fr_ph));
+                    for i = 1 : length(u_fr_ph)
+                        n_fr_ph(i) = sum(u_fr_ph == i);
+                    end
+                    
+                    id_sat_pr = find(go_id_pr == g);
+                    % If I don't really have code for this satellite do nothing
+                    if ~isempty(id_sat_pr)
+                        pr_sat_code = this.obs_code(id_pr(id_sat_pr),:);
+                        ph_sat_cs = this.sat.cycle_slip_ph_by_ph(:,id_sat_ph);
+                        lid_cs_ep = sum(ph_sat_cs,2) > 0; % epoch with a cycle slip
+                        id_cs_ep = find(lid_cs_ep);
+                        n_epoch = size(this.sat.cycle_slip_ph_by_ph,1);
+                        for ce = id_cs_ep' % for each epoch with a cycle slip
+                            % 1) for each frequency check all tracking if one
+                            % has jumped and the other no check if was really a
+                            % cycle slip and repair
+                            for f  = u_fr_ph'
+                                id_fr_sat = find(ph_sat_code(:,2) == f);
+                                cs_same_f = ph_sat_cs(ce,id_fr_sat) & isnan(ph(ce, id_sat_ph(id_fr_sat)));
+                                if sum(cs_same_f) < length(cs_same_f) && sum(cs_same_f) > 0 % if not all have jumped
+                                    id_not_cs = find(~cs_same_f);
+                                    for s = find(cs_same_f)'
+                                        cs_f = find(ph_sat_cs(:,id_fr_sat(s)));
+                                        notcs_f = find(ph_sat_cs(:,id_not_cs(1))); % using first good frequency
+                                        cs_bf = max([1; cs_f(cs_f < ce); notcs_f(notcs_f< ce)]);
+                                        cs_aft = min([cs_f(cs_f > ce); notcs_f(notcs_f > ce); n_epoch]);
+                                        id_1 = id_sat_ph(id_fr_sat(s));
+                                        id_2 = id_sat_ph(id_fr_sat(id_not_cs(1)));
+                                        jmp = mean(ph(ce:cs_aft,id_1) - ph(ce:cs_aft,id_2) ,'omitnan') - mean(ph(cs_bf:(ce-1),id_1) - ph(cs_bf:(ce-1),id_2),'omitnan');
+                                        i_jmp = round(jmp/wl_sat(id_fr_sat(1)));
+                                        if abs(jmp/wl_sat(id_fr_sat(1)) - i_jmp) < 0.05 % very rough test for significance 95% of confidence
+                                            this.sat.cycle_slip_ph_by_ph(ce,id_1) = false; % remove cycle slip
+                                            if i_jmp ~= 0
+                                                ph(ce:end,id_1) = ph(ce:end,id_1) - i_jmp*wl_sat(id_fr_sat(1));
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                        ph_sat_cs = this.sat.cycle_slip_ph_by_ph(:,id_sat_ph);
+                        lid_cs_ep = sum(ph_sat_cs,2) > 0; % epoch with a cycle slip
+                        id_cs_ep = find(lid_cs_ep);
+                        % 2) check the geometry free and the Melbourne-Wubbena
+                        % if one of the two detect a cycle slip then
+                        % it is really a cycle slip otherwise remove it
+                        for ce = id_cs_ep'
+                            fr_jmp = false(size(u_fr_ph));
+                            for f  = 1 : length(u_fr_ph)
+                                id_fr_sat = find(ph_sat_code(:,2) == f);
+                                cs_same_f = ph_sat_cs(ce, id_fr_sat);
+                                fr_jmp(f) = sum(cs_same_f) > 0;
+                            end
+                            % for each cycle slip
+                            if sum(ph_sat_cs(ce, :) | isnan(ph(ce,id_sat_ph))) ~= length(ph_sat_cs(ce, :)) % if not everything jump
+                                for cs = find(ph_sat_cs(ce, :))
+                                    if ce > 10 && sum(isnan(ph((ce-10):(ce-1),id_sat_ph(cs)))) < 9 % check if is the start of an arc
+                                        % find a pivot -> use the one with the
+                                        % wavelength closer to the cycle slip
+                                        idx_n_jmp = find(~ph_sat_cs(ce, :));
+                                        wl_n_jmp = wl(id_sat_ph(idx_n_jmp));
+                                        wl_jmp = wl(id_sat_ph(cs));
+                                        wl_n_jmp(wl_n_jmp == wl_jmp ) = 1e9;
+                                        [~,id_pv] = min(abs(wl_n_jmp- wl_jmp));
+                                        if id_pv ~= cs
+                                            wl_n_jmp = wl(id_sat_ph(id_pv));
+                                            % find cs before and after
+                                            cs_f = find(ph_sat_cs(:,cs));
+                                            notcs_f = find(ph_sat_cs(:,id_pv)); % using first good frequency
+                                            cs_bf = max([1; cs_f(cs_f < ce); notcs_f(notcs_f< ce)]);
+                                            cs_aft = min([cs_f(cs_f > ce); notcs_f(notcs_f > ce); n_epoch]);
+                                            id_1 = id_sat_ph(cs);
+                                            id_2 = id_sat_ph(id_pv);
+                                            % build geom free and mlw wubb
+                                            gf = ph(cs_bf:cs_aft,id_1) - ph(cs_bf:cs_aft,id_2);
+                                            % find pseudoranges of the same frequencies
+                                            % and use the one with the betst code
+                                            ids_pr1 = find(pr_sat_code(:,2) == ph_sat_code(cs,2));
+                                            ids_pr2 = find(pr_sat_code(:,2) == ph_sat_code(id_pv,2));
+                                            if ~isempty(ids_pr1) && ~isempty(ids_pr2) % might be code is unavailable for such an observable
+                                                
+                                                bnd_1_prf = cc.getSys(cc.getSysPrn(g)).CODE_RIN3_ATTRIB(cc.getSys(cc.getSysPrn(g)).CODE_RIN3_2BAND == ph_sat_code(cs,2));
+                                                bnd_2_prf = cc.getSys(cc.getSysPrn(g)).CODE_RIN3_ATTRIB(cc.getSys(cc.getSysPrn(g)).CODE_RIN3_2BAND == ph_sat_code(id_pv,2));
+                                                id_pr1 = length(ids_pr1);
+                                                for i1 = ids_pr1'
+                                                    id_pr1 = min(id_pr1, find(bnd_1_prf{1} == pr_sat_code(i1,3)));
+                                                end
+                                                id_pr2 = length(ids_pr2);
+                                                for i2 = ids_pr2'
+                                                    id_pr2 = min(id_pr2, find(bnd_2_prf{1} == pr_sat_code(i2,3)));
+                                                end
+                                                id_pr1 = id_sat_pr(id_pr1);
+                                                id_pr2 = id_sat_pr(id_pr2);
+                                                mwb = (wl_n_jmp*ph(cs_bf:cs_aft,id_1) - wl_jmp*ph(cs_bf:cs_aft,id_2))/(wl_n_jmp - wl_jmp) - (wl_n_jmp*pr(cs_bf:cs_aft,id_pr1) + wl_jmp*pr(cs_bf:cs_aft,id_pr2))/(wl_n_jmp + wl_jmp);
+                                                
+                                            else
+                                                mwb = zeros(size(gf));
+                                            end
+                                            id_jmp2 = ce -cs_bf +1; % id of the jmp in phase combination
+                                            dgf = diff(gf);
+                                            if (abs(dgf(id_jmp2-1)) < 0.15*wl_jmp) || ...
+                                                    abs(mean(mwb(1:id_jmp2-1),'omitnan') - mean(mwb(id_jmp2:end),'omitnan')) < 0.15*(wl_n_jmp * wl_jmp)/(wl_n_jmp - wl_jmp) % if gf jump is less than 0.15 the cycle or if the idfference of mwb is less than 0.15 the widelane
+                                                this.sat.cycle_slip_ph_by_ph(ce,id_1) = false;% remove cycle slip
+                                            end
+                                        end
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+                this.setPhases(ph,wl,lid_ph); % set back phases                
+            end
+            
+            % Add epochs with no valid code
+            id_ko = ~any(this.getCodeAvailability(), 2);
+            if any(id_ko)
+                n_out = sum(serialize(this.sat.outliers_ph_by_ph(id_ko, :)));
+                n_ko = sum(serialize(~isnan(ph(id_ko, :))));
+                if (n_ko - n_out) > 0
+                    log.addMessage(log.indent(sprintf('Adding other %d phase outliers due to missing valid pseudo-ranges', n_ko - n_out)));
+                end
+                this.sat.outliers_ph_by_ph(id_ko, :) = ~isnan(ph(id_ko, :));
+            end
+            
+            
+            flag_debug = false;
+            if flag_debug
+                phrd = Core_Utils.diffAndPred(phr); 
+                dt = cumsum(nan2zero(phrd((1:n_epoch)' + n_epoch*max(0,(double(pivot_sat)-1))))); 
+                %data = [ zeros(1, size(phrd,2)); diff(phr - dt) + 0.5 * (1:size(phr,2))];
+                data = Core_Utils.diffAndPred(phr - dt) + 0.3 * (1:size(phr,2));
+                figure; plotSep(data, '.-'); hold on; title('Sat by sat temporal diff (pivot removed)')
+                for s = 1: size(phrd,2);
+                    id_ko = this.sat.outliers_ph_by_ph(:, s);
+                    hold on; plot(find(id_ko), data(id_ko,s), '*r');
+                    data(id_ko,s) = nan;
+                    id_ko = this.sat.cycle_slip_ph_by_ph(:, s);
+                    hold on; plot(find(id_ko), data(id_ko,s), 'ok');
+                    data(id_ko,s) = nan;
+                end
+                figure; plotSep(data, '.-');  title('Sat by sat temporal diff (pivot removed) with no outliers')
+            end
         end
                 
         function repairCycleSlipRough(this)
@@ -2479,7 +2985,184 @@ classdef Receiver_Work_Space < Receiver_Commons
             Core.getLogger.addMarkedMessage(sprintf('%d out of %d cycle slips repaired',r,r+nr));
             this.setPhases(phases, wl, lid);
         end
-                
+        
+        
+        function cycleSlipRepair(this)
+            % Cycle slip repair
+            %
+           max_window = 300; %maximum windows allowed lef and right (10 min)
+           iono_const = 40.3*10^16/Core_Utils.V_LIGHT^2;
+           
+           
+           [phases, wl,lid] = this.getPhases;
+           s_ph = this.getSyntPhases;
+           ph_r = zero2nan(phases) - zero2nan(s_ph);
+           cycle_slips = this.sat.cycle_slip_ph_by_ph;
+           go_id = this.go_id(lid);
+           el = this.sat.el(:,go_id);
+           n_ep = size(ph_r,1);
+           n_os =  size(cycle_slips,2);
+           ambs = [];
+           for s = 1 : n_os
+               for cs = find(cycle_slips(:,s))'
+                   idx_bf = max(1,cs - round(max_window/this.getRate()));
+                   idx_aft = min(n_ep,cs + round(max_window/this.getRate()));
+                   if any(ph_r(idx_bf:(cs-1),s)) % if there is any observation before
+                       cs_t = cs - idx_bf +1;
+                       ph_temp = ph_r(idx_bf:idx_aft,:); % useful obsrvations
+                       idx_os = isnan(ph_temp(:,s));
+                       ph_temp(idx_os,:) =nan;
+                       el_temp = el(idx_bf:idx_aft,:);
+                       cs_temp = cycle_slips(idx_bf:idx_aft,:);
+                       useful_obs = false(1,size(cycle_slips,2));
+                       for z = 1 : n_os
+                           if z~=s
+                               for zs = find(cs_temp(:,z))'
+                                   if zs < cs_t  % remove observations before
+                                       ph_temp(1:(zs-1),z) = nan;
+                                   else % remove observation after
+                                       ph_temp(zs:end,z) = nan;
+                                   end
+                               end
+                           else
+                               for zs = find(cs_temp(:,z))'
+                                   if zs < cs_t  % remove observations before
+                                       ph_temp(1:(zs-1),z) = nan;
+                                   elseif zs ~= cs_t% remove observation after
+                                       ph_temp(zs:end,z) = nan;
+                                   end
+                               end
+                           end
+                           if any(ph_temp((1:cs_t-1),z)) && any(ph_temp(cs_t:end,z))
+                               useful_obs(z) = true;
+                           end
+                       end
+                       if sum(useful_obs) > 1 && useful_obs(s)% if there is at least an other valid stream
+                           valid_ep = sum(~isnan(ph_temp),2) > 1;
+%                            ph_temp(~valid_ep,:) = nan;
+%                            useful_obs(sum(~isnan(ph_temp)) == 0) = false;
+                           if any(valid_ep) %&& sum(useful_obs) > 1
+                               ep2pep = zeros(size(valid_ep)); %epoch to progressive valid epoch
+                               ep2pep(valid_ep) = 1:sum(valid_ep);
+                               s2ps = zeros(1,max(go_id));  %satellite to progressive valid satellite
+                               uvgoid = unique(go_id(useful_obs));
+                               s2ps(uvgoid) = 1 : length(uvgoid);
+                               n_obs = sum(sum(~isnan(ph_temp)));
+                               A = zeros(n_obs,5);
+                               A_idx = zeros(n_obs,5);
+                               y = zeros(n_obs,1);
+                               w = zeros(n_obs,1);
+                               strm =  zeros(n_obs,1);
+                               n_io = zeros(size(ph_temp,1),length(uvgoid));
+                               ni = 0;
+                               if this.isMultiFreq()
+                                   for u = 1 : length(uvgoid)
+                                       idx_v = sum(~isnan(ph_temp(:,(go_id == uvgoid(u))' & useful_obs)),2) > 0;
+                                       n_io(idx_v,u) = ni + (1:sum(idx_v));
+                                       ni = ni + sum(idx_v);
+                                   end
+                               end
+                               n_psiono = sum(max(sum(n_io~=0,1) -1,0)); %number fo iono pseudobservation
+                               A_p_idx = zeros(n_psiono,2);
+                               A_p = [ones(n_psiono,1) -ones(n_psiono,1)];
+                               w_p = zeros(n_psiono,1);
+                               
+                               n_ppo = 0;
+                               for u = 1 : length(uvgoid)
+                                   idx_o = 0 ~= (n_io(:,u));
+                                   if sum(idx_o) > 1
+                                       n_o = sum(idx_o);
+                                       n_io_tmp = n_io(idx_o,u);
+                                       A_p_idx(n_ppo + (1:(n_o-1)),1) = n_io_tmp(1:end-1);
+                                       A_p_idx(n_ppo + (1:(n_o-1)),2) = n_io_tmp(2:end);
+                                       w_p(n_ppo + (1:(n_o-1))) = 1./(0.01 * diff(find(idx_o))).^2;
+                                       n_ppo = n_ppo + n_o-1;
+                                   end
+                               end
+                               
+                               n_po = 0;
+                               for v = find(useful_obs)
+                                   idx_o = ~isnan(ph_temp(:,v));
+                                   n_o = sum(idx_o);
+                                   y(n_po + (1:n_o)) = ph_temp(idx_o,v);
+                                   strm(n_po + (1:n_o)) = v;
+                                   w(n_po + (1:n_o)) = 1 ./ (0.01 ./ sind(el_temp(idx_o,v))).^2;
+                                   A_idx(n_po + (1:n_o), 1) = ep2pep(idx_o);
+                                   A_idx(n_po + (1:n_o), 2) = s2ps(go_id(v));
+                                   A_idx(n_po + (1:n_o), 3) = s2ps(go_id(v));
+                                   A_idx(n_po + (1:n_o), 4) = n_io(idx_o,uvgoid == go_id(v));
+                                   A(n_po + (1:n_o), 1) = 1;
+                                   A(n_po + (1:n_o), 2) = 1;
+                                   A(n_po + (1:n_o), 3) = find(idx_o);
+                                   A(n_po + (1:n_o), 4) = iono_const*wl(v)^2;
+                                   if v == s
+                                       css = sum(idx_o(1:(cs_t)));
+                                       A(n_po + (css:n_o), 5) = wl(v);
+                                       A_idx(n_po + (css:n_o), 5) = 1;
+                                   end
+                                   n_po = n_po + n_o;
+                                   
+                               end
+                               
+                               n_clk = max(A_idx(:,1));
+                               n_lin1 = max(A_idx(:,2));
+                               n_lin2 = max(A_idx(:,3));
+                               A_idx(:,2) = nan2zero(zero2nan(A_idx(:,2)) + n_clk);
+                               A_idx(:,3) = nan2zero(zero2nan(A_idx(:,3)) + n_clk + n_lin1);
+                               A_idx(:,4) = nan2zero(zero2nan(A_idx(:,4)) + n_clk + n_lin1 + n_lin2);
+                               A_idx(:,5) = nan2zero(zero2nan(A_idx(:,5)) + max(max(A_idx(:,3:4))));
+                               A_p_idx = nan2zero(zero2nan(A_p_idx) + n_clk + n_lin1 + n_lin2);
+                               
+                               num_p = max(A_idx(:,5));
+                               rows = repmat((1:n_obs)',1,5);
+                               A(A_idx == 0) = 0;
+                               A_idx(A_idx == 0) = 1;
+                               try
+                               As = sparse(rows,A_idx,A,n_obs,num_p);
+                               catch ex
+                                   keyboard
+                               end
+                               
+                               rows = repmat((1:n_psiono)',1,2);
+                               
+                               A_p(A_p_idx == 0) = 0;
+                               A_p_idx(A_p_idx == 0) = 1;
+                               try
+                               As = [As; sparse(rows,A_p_idx,A_p,n_psiono,num_p)];
+                               catch ex
+                                   keyboard
+                               end
+                               
+                               idx_rm = s2ps(go_id(s)) + [n_clk ( n_clk + n_lin1)]; 
+                               As(:, idx_rm) = [];
+                               W = spdiags([w; w_p],0,n_obs + n_psiono, n_obs + n_psiono);
+                               
+                               N = As' * W * As;
+                               B = As' * W * [y; zeros(n_psiono,1)];
+                               
+                               Cxx = spinv(N);
+                               x = Cxx*B;
+                               s_amb = Cxx(end,end);
+                               amb = x(end);
+                               a_frac = abs(amb - round(amb));
+                               ambs = [ambs ; amb];                             
+                               if Fixer.oneDimPMF( amb, sqrt(s_amb)) > 0.8 & a_frac < 0.05
+                                   cycle_slips(cs,s) = false;
+                                   phases(cs:end,s) = phases(cs:end,s) - round(amb)*wl(s);
+                                   ph_r(:,s) =  zero2nan(phases(:,s)) - zero2nan(s_ph(:,s));
+                               end
+                           end
+                       end
+                       
+                       
+                   end
+               end
+           end
+           
+           this.setPhases(phases, wl,lid);
+           this.sat.cycle_slip_ph_by_ph = cycle_slips;
+        end
+        
         function tryCycleSlipRepair(this)
             % Cycle slip repair
             %
@@ -2645,7 +3328,8 @@ classdef Receiver_Work_Space < Receiver_Commons
             
             t0 = tic;
             
-            this.log.addMessage(this.log.indent(sprintf('Reading observations of %s', file_name)));
+            log = Core.getLogger;
+            log.addMessage(log.indent(sprintf('Reading observations of %s', file_name)));
             
             if isempty(this.file) || ~strcmp(this.file.getFileName, file_name)
                 this.file =  File_Rinex(file_name, 9);
@@ -2653,150 +3337,154 @@ classdef Receiver_Work_Space < Receiver_Commons
             
             if this.file.isValid()
                 if ~isempty(this.file.first_epoch)
-                    this.log.addMessage(this.log.indent(sprintf(' - first epoch found at: %s', this.file.first_epoch.last.toString())));
+                    log.addMessage(log.indent(sprintf(' - first epoch found at: %s', this.file.first_epoch.last.toString())));
                 end
                 if ~isempty(this.file.last_epoch)
-                    this.log.addMessage(this.log.indent(sprintf(' - last  epoch found at: %s', this.file.last_epoch.last.toString())));
+                    log.addMessage(log.indent(sprintf(' - last  epoch found at: %s', this.file.last_epoch.last.toString())));
                 end
                 % open RINEX observation file
                 fid = fopen(file_name,'rt');
-                txt = fread(fid,'*char')';
-                % try to see if carriage return is present in the file (Windows stupid standard)
-                % On Windows file lines ends with char(13) char(10)
-                % instead of just using char(10)
-                if ~isempty(find(txt(1:min(1000,numel(txt))) == 13, 1, 'first'))
-                    has_cr = true;  % The file has carriage return - I hate you Bill!
+                if fid < 0
+                    log.addError(sprintf('The file "%s" cannot be accessed!!!', file_name));
                 else
-                    has_cr = false;  % The file is UNIX standard
-                end
-                % txt = txt(txt ~= 13);  % remove carriage return - I hate you Bill!
-                fclose(fid);
-                
-                % get new line separators
-                nl = regexp(txt, '\n')';
-                if nl(end) <  (numel(txt) - double(has_cr))
-                    nl = [nl; numel(txt)];
-                end
-                lim = [[1; nl(1 : end - 1) + 1] (nl - 1 - double(has_cr))];
-                lim = [lim lim(:,2) - lim(:,1)];
-                while lim(end,3) < 3
-                    lim(end,:) = [];
-                end
-                
-                % removing empty lines at end of file
-                while (lim(end,1) - lim(end-1,1))  < 2
-                    lim(end,:) = [];
-                end
-                
-                % importing header informations
-                eoh = this.file.eoh;
-                flag_corrupt = false;
-                try
-                    this.parseRinHead(txt, lim, eoh);
-                catch
-                    % The header is corrupt
-                    Core.getLogger.addError('The header is corrupt! Loading of the RINEX is not possible');
-                    flag_corrupt = true;
-                end
-                
-                if not(flag_corrupt)
-                    if (this.rin_type < 3)
-                        % considering rinex 2
-                        this.parseRin2Data(txt, has_cr, lim, eoh, t_start, t_stop, rate, sys_c_list, otype_list);
+                    txt = fread(fid,'*char')';
+                    % try to see if carriage return is present in the file (Windows stupid standard)
+                    % On Windows file lines ends with char(13) char(10)
+                    % instead of just using char(10)
+                    if ~isempty(find(txt(1:min(1000,numel(txt))) == 13, 1, 'first'))
+                        has_cr = true;  % The file has carriage return - I hate you Bill!
                     else
-                        % considering rinex 3
-                        while lim(end,3) < 32
-                            lim(end,:) = [];
+                        has_cr = false;  % The file is UNIX standard
+                    end
+                    % txt = txt(txt ~= 13);  % remove carriage return - I hate you Bill!
+                    fclose(fid);
+                    
+                    % get new line separators
+                    nl = regexp(txt, '\n')';
+                    if nl(end) <  (numel(txt) - double(has_cr))
+                        nl = [nl; numel(txt)];
+                    end
+                    lim = [[1; nl(1 : end - 1) + 1] (nl - 1 - double(has_cr))];
+                    lim = [lim lim(:,2) - lim(:,1)];
+                    while lim(end,3) < 3
+                        lim(end,:) = [];
+                    end
+                    
+                    % removing empty lines at end of file
+                    while (lim(end,1) - lim(end-1,1))  < 2
+                        lim(end,:) = [];
+                    end
+                    
+                    % importing header informations
+                    eoh = this.file.eoh;
+                    flag_corrupt = false;
+                    try
+                        this.parseRinHead(txt, lim, eoh);
+                    catch
+                        % The header is corrupt
+                        Core.getLogger.addError('The header is corrupt! Loading of the RINEX is not possible');
+                        flag_corrupt = true;
+                    end
+                    
+                    if not(flag_corrupt)
+                        if (this.rin_type < 3)
+                            % considering rinex 2
+                            this.parseRin2Data(txt, has_cr, lim, eoh, t_start, t_stop, rate, sys_c_list, otype_list);
+                        else
+                            % considering rinex 3
+                            while lim(end,3) < 32
+                                lim(end,:) = [];
+                            end
+                            this.parseRin3Data(txt, lim, eoh, t_start, t_stop, rate, sys_c_list, otype_list);
                         end
-                        this.parseRin3Data(txt, lim, eoh, t_start, t_stop, rate, sys_c_list, otype_list);
-                    end
-                    
-                    % guess rinex3 flag for incomplete flag (probably coming from rinex2 or converted rinex2 -> rinex3)
-                    % WARNING!! (C/A) + (P2-P1) semi codeless tracking (flag C2D) receiver not supporter (in rinex 2) convert them
-                    % using cc2noncc converter https://github.com/ianmartin/cc2noncc (not tested)
-                    
-                    % GPS C1 -> C1C
-                    idx = this.findObservableByFlag('C1 ','G');
-                    this.obs_code(idx,:) = repmat('C1C',length(idx),1);
-                    % GPS C2 -> C2C
-                    idx = this.findObservableByFlag('C2 ','G');
-                    this.obs_code(idx,:) = repmat('C2C',length(idx),1);
-                     % GPS S1 -> S1C
-                    idx = this.findObservableByFlag('S1 ','G');
-                    this.obs_code(idx,:) = repmat('S1C',length(idx),1);
-                    % GPS S2 -> S2C
-                    idx = this.findObservableByFlag('S2 ','G');
-                    this.obs_code(idx,:) = repmat('S2C',length(idx),1);
-                    % GPS L1 -> L1C
-                    idx = this.findObservableByFlag('L1 ','G');
-                    this.obs_code(idx,:) = repmat('L1C',length(idx),1);
-                    % GPS L2 -> L2W
-                    idx = this.findObservableByFlag('L2 ','G');
-                    this.obs_code(idx,:) = repmat('L2W',length(idx),1);
-                    % GPS C5 -> C5I
-                    idx = this.findObservableByFlag('C5 ','G');
-                    this.obs_code(idx,:) = repmat('C5I',length(idx),1);
-                    % GPS L5 -> L5I
-                    idx = this.findObservableByFlag('L5 ','G');
-                    this.obs_code(idx,:) = repmat('L5I',length(idx),1);
-                    % GPS P1 -> C1W
-                    idx = this.findObservableByFlag('P1 ','G');
-                    this.obs_code(idx,:) = repmat('C1W',length(idx),1);
-                    % GPS P2 -> C2W
-                    idx = this.findObservableByFlag('P2 ','G');
-                    this.obs_code(idx,:) = repmat('C2W',length(idx),1);
-                    % GLONASS C1 -> C1C
-                    idx = this.findObservableByFlag('C1 ','R');
-                    this.obs_code(idx,:) = repmat('C1C',length(idx),1);
-                    % GLONASS C2 -> C2C
-                    idx = this.findObservableByFlag('C2 ','R');
-                    this.obs_code(idx,:) = repmat('C2C',length(idx),1);
-                    % GLONASS C1 -> C1C
-                    idx = this.findObservableByFlag('L1 ','R');
-                    this.obs_code(idx,:) = repmat('L1C',length(idx),1);
-                    % GLONASS C2 -> C2C
-                    idx = this.findObservableByFlag('L2 ','R');
-                    this.obs_code(idx,:) = repmat('L2C',length(idx),1);
-                    % GLONASS P1 -> C1P
-                    idx = this.findObservableByFlag('P1 ','R');
-                    this.obs_code(idx,:) = repmat('C1P',length(idx),1);
-                    % GLONASS P2 -> C2P
-                    idx = this.findObservableByFlag('P2 ','R');
-                    this.obs_code(idx,:) = repmat('C2P',length(idx),1);
-                    % GALILEO C1 -> C1A
-                    idx = this.findObservableByFlag('C1 ','E');
-                    this.obs_code(idx,:) = repmat('C1A',length(idx),1);
-                    % GALILEO L1 -> L1A
-                    idx = this.findObservableByFlag('L1 ','E');
-                    this.obs_code(idx,:) = repmat('L1A',length(idx),1);
-                    % BEIDOU 1 -> 2
-                    idx = this.findObservableByFlag('?1?','C'); %some times band 2 rinex 3 is incorrectly written as band 1
-                    this.obs_code(idx,2) = '2';
-                    % other flags to be investiagated
-                    
-                    this.log.addMessage(this.log.indent(sprintf('Parsing completed in %.2f seconds', toc(t0))));
-                    this.log.newLine();
-                    
-                    % Compute the other useful status array of the receiver object
-                    if ~isempty(this.obs)
-                        this.updateStatus();
-                    end
-                    
-                    % remove empty observables
-                    this.remObs(~this.active_ids);
-                    % remove empty sets very useful when reading RINEX 2
-                    % multi-constellations files
-                    if ~isempty(this.obs)
-                        this.remObs(~(any(this.obs')));
-                        % remove unselected observations
-                        u_sys_c = unique(this.system);
-                        for i = 1 : length(u_sys_c)
-                            sys_c = u_sys_c(i);
-                            ss = cc.getSys(sys_c);
-                            active_band = ss.CODE_RIN3_2BAND(~ss.flag_f);
-                            for j = 1 : length(active_band)
-                                idx = this.findObservableByFlag(['?' active_band(j) '?'] ,sys_c);
-                                this.remObs(idx);
+                        
+                        % guess rinex3 flag for incomplete flag (probably coming from rinex2 or converted rinex2 -> rinex3)
+                        % WARNING!! (C/A) + (P2-P1) semi codeless tracking (flag C2D) receiver not supporter (in rinex 2) convert them
+                        % using cc2noncc converter https://github.com/ianmartin/cc2noncc (not tested)
+                        
+                        % GPS C1 -> C1C
+                        idx = this.findObservableByFlag('C1 ','G');
+                        this.obs_code(idx,:) = repmat('C1C',length(idx),1);
+                        % GPS C2 -> C2C
+                        idx = this.findObservableByFlag('C2 ','G');
+                        this.obs_code(idx,:) = repmat('C2C',length(idx),1);
+                        % GPS S1 -> S1C
+                        idx = this.findObservableByFlag('S1 ','G');
+                        this.obs_code(idx,:) = repmat('S1C',length(idx),1);
+                        % GPS S2 -> S2C
+                        idx = this.findObservableByFlag('S2 ','G');
+                        this.obs_code(idx,:) = repmat('S2C',length(idx),1);
+                        % GPS L1 -> L1C
+                        idx = this.findObservableByFlag('L1 ','G');
+                        this.obs_code(idx,:) = repmat('L1C',length(idx),1);
+                        % GPS L2 -> L2W
+                        idx = this.findObservableByFlag('L2 ','G');
+                        this.obs_code(idx,:) = repmat('L2W',length(idx),1);
+                        % GPS C5 -> C5I
+                        idx = this.findObservableByFlag('C5 ','G');
+                        this.obs_code(idx,:) = repmat('C5I',length(idx),1);
+                        % GPS L5 -> L5I
+                        idx = this.findObservableByFlag('L5 ','G');
+                        this.obs_code(idx,:) = repmat('L5I',length(idx),1);
+                        % GPS P1 -> C1W
+                        idx = this.findObservableByFlag('P1 ','G');
+                        this.obs_code(idx,:) = repmat('C1W',length(idx),1);
+                        % GPS P2 -> C2W
+                        idx = this.findObservableByFlag('P2 ','G');
+                        this.obs_code(idx,:) = repmat('C2W',length(idx),1);
+                        % GLONASS C1 -> C1C
+                        idx = this.findObservableByFlag('C1 ','R');
+                        this.obs_code(idx,:) = repmat('C1C',length(idx),1);
+                        % GLONASS C2 -> C2C
+                        idx = this.findObservableByFlag('C2 ','R');
+                        this.obs_code(idx,:) = repmat('C2C',length(idx),1);
+                        % GLONASS C1 -> C1C
+                        idx = this.findObservableByFlag('L1 ','R');
+                        this.obs_code(idx,:) = repmat('L1C',length(idx),1);
+                        % GLONASS C2 -> C2C
+                        idx = this.findObservableByFlag('L2 ','R');
+                        this.obs_code(idx,:) = repmat('L2C',length(idx),1);
+                        % GLONASS P1 -> C1P
+                        idx = this.findObservableByFlag('P1 ','R');
+                        this.obs_code(idx,:) = repmat('C1P',length(idx),1);
+                        % GLONASS P2 -> C2P
+                        idx = this.findObservableByFlag('P2 ','R');
+                        this.obs_code(idx,:) = repmat('C2P',length(idx),1);
+                        % GALILEO C1 -> C1A
+                        idx = this.findObservableByFlag('C1 ','E');
+                        this.obs_code(idx,:) = repmat('C1A',length(idx),1);
+                        % GALILEO L1 -> L1A
+                        idx = this.findObservableByFlag('L1 ','E');
+                        this.obs_code(idx,:) = repmat('L1A',length(idx),1);
+                        % BEIDOU 1 -> 2
+                        idx = this.findObservableByFlag('?1?','C'); %some times band 2 rinex 3 is incorrectly written as band 1
+                        this.obs_code(idx,2) = '2';
+                        % other flags to be investiagated
+                        
+                        log.addMessage(log.indent(sprintf('Parsing completed in %.2f seconds', toc(t0))));
+                        log.newLine();
+                        
+                        % Compute the other useful status array of the receiver object
+                        if ~isempty(this.obs)
+                            this.updateStatus();
+                        end
+                        
+                        % remove empty observables
+                        this.remObs(~this.active_ids);
+                        % remove empty sets very useful when reading RINEX 2
+                        % multi-constellations files
+                        if ~isempty(this.obs)
+                            this.remObs(~(any(this.obs')));
+                            % remove unselected observations
+                            u_sys_c = unique(this.system);
+                            for i = 1 : length(u_sys_c)
+                                sys_c = u_sys_c(i);
+                                ss = cc.getSys(sys_c);
+                                active_band = ss.CODE_RIN3_2BAND(~ss.flag_f);
+                                for j = 1 : length(active_band)
+                                    idx = this.findObservableByFlag(['?' active_band(j) '?'] ,sys_c);
+                                    this.remObs(idx);
+                                end
                             end
                         end
                     end
@@ -2958,9 +3646,21 @@ classdef Receiver_Work_Space < Receiver_Commons
             % 3) 'MARKER NAME'
             fln = find(line2head == 3, 1, 'first'); % get field line
             if isempty(fln)
-                this.parent.marker_name = 'NO_NAME';
+                if isempty(this.parent.marker_name)
+                    this.parent.marker_name = 'NO_NAME';
+                end
             else
-                this.parent.marker_name = strtrim(txt(lim(fln, 1) + (0:59)));
+                tmp = strtrim(txt(lim(fln, 1) + (0:59)));
+                if isempty(tmp)
+                    % if the header does not contain a marker "extract" it from the filename
+                    tmp = this.file.file_name_list{1};
+                    if numel(tmp) > 4
+                        tmp = upper(tmp(1:4));
+                    end
+                end
+                if not(isempty(tmp))
+                    this.parent.marker_name = tmp;
+                end
             end
             % 4) 'OBSERVER / AGENCY'
             fln = find(line2head == 4, 1, 'first'); % get field line
@@ -3163,6 +3863,8 @@ classdef Receiver_Work_Space < Receiver_Commons
             % Parse the data part of a RINEX 2 file -  the header must already be parsed
             % SYNTAX this.parseRin2Data(txt, lim, eoh, <t_start>, <t_stop>, <rate>, <sys_c>)
             % remove comment line from lim
+            
+            log = Core.getLogger;
             if nargin < 6
                 t_start = GPS_Time(0);
                 t_stop = GPS_Time(800000); % 2190/04/28 an epoch very far away
@@ -3199,7 +3901,7 @@ classdef Receiver_Work_Space < Receiver_Commons
             id_ko = (string_time(18,:) ~= '.');
             if any(id_ko)
                 corrupted_lines = serialize([repmat((' - ')', 1, sum(id_ko)); string_time(:, id_ko); char(10 * ones(1, sum(id_ko), 'uint8'))])';
-                this.log.addWarning(sprintf('These epoch lines are apparently corrupted:\n%s', corrupted_lines));
+                log.addWarning(sprintf('These epoch lines are apparently corrupted:\n%s', corrupted_lines));
                 string_time(:, id_ko) = [];
                 t_line(id_ko) = [];
             end
@@ -3314,8 +4016,10 @@ classdef Receiver_Work_Space < Receiver_Commons
                     this.wl = [this.wl; wl];
                 end
                 
-                this.w_bar.createNewBar(' Parsing epochs...');
-                this.w_bar.setBarLen(n_epo);
+                if n_epo > 3600 && log.isScreenOut
+                    this.w_bar.createNewBar(' Parsing epochs...');
+                    this.w_bar.setBarLen(n_epo);
+                end
                 
                 n_ops = numel(this.rin_obs_code.G)/3; % number of observations per satellite
                 n_lps = ceil(n_ops / 5); % number of observation lines per satellite
@@ -3379,7 +4083,9 @@ classdef Receiver_Work_Space < Receiver_Commons
                         this.log.addWarning(sprintf('Problematic epoch found at %s\nInspect the files to detect what went wrong!\nSkipping and continue the parsing, no action taken%s', this.time.getEpoch(e).toString, char(32*ones(this.w_bar.getBarLen(),1))));
                         this.log.setColorMode(cm);
                     end
-                    this.w_bar.go(e);
+                    if log.isScreenOut
+                        this.w_bar.go(e);
+                    end
                 end
                 obs(:, bad_epochs) = [];
                 this.time.remEpoch(bad_epochs);
@@ -3403,6 +4109,7 @@ classdef Receiver_Work_Space < Receiver_Commons
                 otype_list = 'CPLS'; % Not reading doppler by default
             end
             
+            log = Core.getLogger;
             cc = Core.getState.getConstellationCollector;
             
             % find all the observation lines
@@ -3413,7 +4120,6 @@ classdef Receiver_Work_Space < Receiver_Commons
             % find bad epochs (epochs with strange characters):
             bad_ep = ceil(regexp(string_time(:)', '[^\s\.0-9]*') / size(string_time, 1));
             if not(isempty(bad_ep))
-                log = Core.getLogger;
                 corrupted_lines = serialize([repmat((' - ')', 1, numel(bad_ep)); string_time(:, bad_ep); char(10 * ones(1, numel(bad_ep), 'uint8'))])';
                 log.addWarning(sprintf('These epoch lines are apparently corrupted:\n%s', corrupted_lines));
                 t_line(bad_ep) = [];
@@ -3550,12 +4256,12 @@ classdef Receiver_Work_Space < Receiver_Commons
                     if sum(f_id == 0)
                         id_ko = find(f_id == 0);
                         [~, id] = unique(double(obs_code(id_ko, :)) * [1 10 100]');
-                        this.log.addWarning(sprintf('These codes for the %s are not recognized, ignoring data: %s', ss.SYS_EXT_NAME, sprintf('%c%c%c ', obs_code(id_ko(id), :)')));
+                        log.addWarning(sprintf('These codes for the %s are not recognized, ignoring data: %s', ss.SYS_EXT_NAME, sprintf('%c%c%c ', obs_code(id_ko(id), :)')));
                     end
                     this.wl = [this.wl; wl];
                 end
                 
-                if n_epo > 3600
+                if n_epo > 3600 && log.isScreenOut
                     this.w_bar.createNewBar(' Parsing epochs...');
                     this.w_bar.setBarLen(n_epo);
                 end
@@ -3610,7 +4316,7 @@ classdef Receiver_Work_Space < Receiver_Commons
                             %obs(obs_line(1:numel(data{1})), e) = data{1};
                         end
                     end
-                    if n_epo > 3600
+                    if n_epo > 3600 && log.isScreenOut
                         this.w_bar.go(e);
                     end
                 end
@@ -3658,64 +4364,70 @@ classdef Receiver_Work_Space < Receiver_Commons
         function toString(this)
             % Display on screen information about the receiver
             % SYNTAX this.toString();
+            log = Core.getLogger();
             if ~this.isEmpty
-                fprintf('----------------------------------------------------------------------------------\n')
-                this.log.addMarkedMessage(sprintf('Receiver Work Space %s', this.parent.getMarkerName()));
-                fprintf('----------------------------------------------------------------------------------\n')
-                this.log.addMessage(sprintf(' From     %s', this.time.first.toString()));
-                this.log.addMessage(sprintf(' to       %s', this.time.last.toString()));
-                this.log.newLine();
-                this.log.addMessage(sprintf(' Rate of the observations [s]:            %d', this.getRate()));
-                this.log.newLine();
-                this.log.addMessage(sprintf(' Maximum number of satellites seen:       %d', max(this.n_sat)));
-                this.log.addMessage(sprintf(' Number of stored frequencies:            %d', this.n_freq));
-                this.log.newLine();
-                this.log.addMessage(sprintf(' Satellite System(s) seen:                "%s"', unique(this.system)));
-                this.log.newLine();
+                log.simpleSeparator();
+                log.addMarkedMessage(sprintf('Receiver Work Space %s', this.parent.getMarkerName()));
+                log.simpleSeparator();
+                log.addMessage(sprintf(' From     %s', this.time.first.toString()));
+                log.addMessage(sprintf(' to       %s', this.time.last.toString()));
+                log.newLine();
+                log.addMessage(sprintf(' Rate of the observations [s]:            %d', this.getRate()));
+                log.newLine();
+                log.addMessage(sprintf(' Maximum number of satellites seen:       %d', max(this.n_sat)));
+                log.addMessage(sprintf(' Number of stored frequencies:            %d', this.n_freq));
+                log.newLine();
+                log.addMessage(sprintf(' Satellite System(s) seen:                "%s"', unique(this.system)));
+                log.newLine();
                 
                 xyz0 = this.getAPrioriPos();
                 [enu0(1), enu0(2), enu0(3)] = cart2plan(xyz0(:,1), xyz0(:,2), xyz0(:,3));
                 static_dynamic = {'Dynamic', 'Static'};
-                this.log.addMessage(sprintf(' %s receiver', static_dynamic{this.parent.static + 1}));
-                fprintf(' ----------------------------------------------------------\n')
-                this.log.addMessage(' Receiver a-priori position:');
-                this.log.addMessage(sprintf('     X = %+16.4f m        E = %+16.4f m\n     Y = %+16.4f m        N = %+16.4f m\n     Z = %+16.4f m        U = %+16.4f m', ...
+                log.addMessage(sprintf(' %s receiver', static_dynamic{this.parent.static + 1}));
+                log.smallSeparator();
+                log.addMessage(' Receiver a-priori position:');
+                log.addMessage(sprintf('     X = %+16.4f m        E = %+16.4f m\n     Y = %+16.4f m        N = %+16.4f m\n     Z = %+16.4f m        U = %+16.4f m', ...
                     xyz0(1), enu0(1), xyz0(2), enu0(2), xyz0(3), enu0(3)));
                 
                 if ~isempty(this.xyz)
                     enu = zero2nan(this.xyz); [enu(:, 1), enu(:, 2), enu(:, 3)] = cart2plan(zero2nan(this.xyz(:,1)), zero2nan(this.xyz(:,2)), zero2nan(this.xyz(:,3)));
                     xyz_m = median(zero2nan(this.xyz), 1, 'omitnan');
                     enu_m = median(enu, 1, 'omitnan');
-                    this.log.newLine();
-                    this.log.addMessage(' Receiver median position:');
-                    this.log.addMessage(sprintf('     X = %+16.4f m        E = %+16.4f m\n     Y = %+16.4f m        N = %+16.4f m\n     Z = %+16.4f m        U = %+16.4f m', ...
+                    log.newLine();
+                    log.addMessage(' Receiver median position:');
+                    log.addMessage(sprintf('     X = %+16.4f m        E = %+16.4f m\n     Y = %+16.4f m        N = %+16.4f m\n     Z = %+16.4f m        U = %+16.4f m', ...
                         xyz_m(1), enu_m(1), xyz_m(2), enu_m(2), xyz_m(3), enu_m(3)));
                     
                     enu = zero2nan(this.xyz); [enu(:, 1), enu(:, 2), enu(:, 3)] = cart2plan(zero2nan(this.xyz(:,1)), zero2nan(this.xyz(:,2)), zero2nan(this.xyz(:,3)));
                     xyz_m = median(zero2nan(this.xyz), 1, 'omitnan');
                     enu_m = median(enu, 1, 'omitnan');
-                    this.log.newLine();
-                    this.log.addMessage(' Correction of the a-priori position:');
-                    this.log.addMessage(sprintf('     X = %+16.4f m        E = %+16.4f m\n     Y = %+16.4f m        N = %+16.4f m\n     Z = %+16.4f m        U = %+16.4f m', ...
+                    log.newLine();
+                    log.addMessage(' Correction of the a-priori position:');
+                    log.addMessage(sprintf('     X = %+16.4f m        E = %+16.4f m\n     Y = %+16.4f m        N = %+16.4f m\n     Z = %+16.4f m        U = %+16.4f m', ...
                         xyz0(1) - xyz_m(1), enu0(1) - enu_m(1), xyz0(2) - xyz_m(2), enu0(2) - enu_m(2), xyz0(3) - xyz_m(3), enu0(3) - enu_m(3)));
-                    this.log.newLine();
-                    this.log.addMessage(sprintf('     3D distance = %+16.4f m', sqrt(sum((xyz_m - xyz0).^2))));
+                    log.newLine();
+                    log.addMessage(sprintf('     3D distance = %+16.4f m', sqrt(sum((xyz_m - xyz0).^2))));
                 end
-                fprintf(' ----------------------------------------------------------\n')
-                this.log.addMessage(' Processing statistics:');
+                log.smallSeparator();
+                log.addMessage(' Processing statistics:');
                 if not(isempty(this.quality_info.s0_ip) || this.quality_info.s0_ip == 0)
-                    this.log.addMessage(sprintf('     sigma0 code positioning = %+16.4f m', this.quality_info.s0_ip));
+                    log.addMessage(sprintf('     sigma0 code positioning = %+16.4f m', this.quality_info.s0_ip));
                 end
                 if not(isempty(this.quality_info.s0) || this.quality_info.s0 == 0)
-                    this.log.addMessage(sprintf('     sigma0 PPP positioning  = %+16.4f m', this.quality_info.s0));
+                    log.addMessage(sprintf('     sigma0 PPP positioning  = %+16.4f m', this.quality_info.s0));
                 end
-                fprintf(' ----------------------------------------------------------\n')
+                log.smallSeparator();
             end
         end
         
         function is_fixed = isFixed(this)
             rf = Core.getReferenceFrame;
             is_fixed = rf.isFixed(this.parent.getMarkerName4Ch);
+        end
+        
+         function is_fixed = isFixedPrepro(this)
+            rf = Core.getReferenceFrame;
+            is_fixed = rf.isFixedPrepro(this.parent.getMarkerName4Ch);
         end
         
         function is_fixed = hasGoodApriori(this)
@@ -3979,7 +4691,7 @@ classdef Receiver_Work_Space < Receiver_Commons
             %   xyz = this.getAPrioriPos()
             
             % The approx coordinates are from
-            % xyz = this.xyz_approx;
+            xyz = this.xyz_approx;
             xyz = median(xyz, 1);
             if ~any(xyz) && ~isempty(this.xyz)
                 xyz = median(this.getPosXYZ, 1);
@@ -4091,7 +4803,11 @@ classdef Receiver_Work_Space < Receiver_Commons
                 this.updateAllTOT();
             end
             if ~isempty(this.sat.tot)
-                time_tx.addSeconds( - this.sat.tot(idx, sat));                
+                if any(this.dt)
+                    time_tx.addSeconds( - zero2nan(this.sat.tot(idx, sat)) - this.dt(idx));      
+                else
+                    time_tx.addSeconds( - zero2nan(this.sat.tot(idx, sat)));      
+                end
             end
         end
         
@@ -4201,7 +4917,10 @@ classdef Receiver_Work_Space < Receiver_Commons
                 else
                     XR = this.xyz;
                 end
-                XS_loc = XS_loc - XR;
+                if isempty(XR)
+                    XR = [0 0 0];
+                end
+                XS_loc = bsxfun(@minus, XS_loc, XR);
             else
                 cc = Core.getState.getConstellationCollector;
                 n_sat = cc.getMaxNumSat();
@@ -4293,12 +5012,16 @@ classdef Receiver_Work_Space < Receiver_Commons
                     lon = median(lon);
                     h_ortho = median(h_ortho);
                     if ~isempty(this)
-                        if this.state.mapping_function == 3
-                            [mfh, mfw] = atmo.niell(this.time, lat./180*pi, (this.sat.el)./180*pi,h_ellipse);
-                        elseif this.state.mapping_function == 2
-                            [mfh, mfw] = atmo.vmf_grd(this.time, lat./180*pi, lon./180*pi, (this.sat.el)./180*pi, h_ellipse);
-                        elseif this.state.mapping_function == 1
-                            [mfh, mfw] = atmo.gmf(this.time, lat./180*pi, lon./180*pi, h_ortho, (this.sat.el)./180*pi);
+                        if this.state.mapping_function == Prj_Settings.MF_NIEL
+                            [mfh, mfw] = atmo.niell(this.time, lat./180*pi, zero2nan(this.sat.el)./180*pi,h_ellipse);
+                        elseif this.state.mapping_function == Prj_Settings.MF_VMF1
+                            [mfh, mfw] = atmo.vmf_grd(this.time, lat./180*pi, lon./180*pi, (this.sat.el)./180*pi, h_ellipse,1);
+                        elseif this.state.mapping_function == Prj_Settings.MF_VMF3_1
+                            [mfh, mfw] = atmo.vmf_grd(this.time, lat./180*pi, lon./180*pi, (this.sat.el)./180*pi, h_ellipse,3);
+                        elseif this.state.mapping_function == Prj_Settings.MF_VMF3_5
+                            [mfh, mfw] = atmo.vmf_grd(this.time, lat./180*pi, lon./180*pi, (this.sat.el)./180*pi, h_ellipse,3);
+                        elseif this.state.mapping_function == Prj_Settings.MF_GMF
+                            [mfh, mfw] = atmo.gmf(this.time, lat./180*pi, lon./180*pi, h_ortho, zero2nan(this.sat.el)./180*pi);
                         end
                        
                         if ~isempty(id_sync)
@@ -4308,9 +5031,9 @@ classdef Receiver_Work_Space < Receiver_Commons
                         
                         if nargout > 2
                             if this.state.mapping_function_gradient == 1
-                                cotan_term = Atmosphere.chenHerringGrad((this.sat.el)./180*pi);
+                                cotan_term = Atmosphere.chenHerringGrad(zero2nan(this.sat.el)./180*pi);
                             elseif this.state.mapping_function_gradient == 2
-                                [cotan_term] = Atmosphere.macmillanGrad((this.sat.el)./180*pi);
+                                [cotan_term] = Atmosphere.macmillanGrad(zero2nan(this.sat.el)./180*pi);
                             end
                             if ~isempty(id_sync)
                                 cotan_term = cotan_term(id_sync, :);
@@ -5938,7 +6661,7 @@ classdef Receiver_Work_Space < Receiver_Commons
             wl_cycle = zero2nan(wl_cycle) + repmat(wsb,size(mwb.obs,1),1);
             
             [wl_cycle(~isnan(wl_cycle)), wsb_rec] = Core_Utils.getFracBias(wl_cycle(~isnan(wl_cycle)));
-            % apply tyhe cycle to the widelane
+            % apply the cycle to the widelane
             wl =  this.getWideLane('L1','L2','G');
             amb_idx = zeros(size(wl.obs,1),cc.getGPS.N_SAT, 'uint16');
             amb_idx(:, wl.go_id) = wl.getAmbIdx();
@@ -6152,7 +6875,14 @@ classdef Receiver_Work_Space < Receiver_Commons
                 if ischar(arg2)
                     synt_ph = synt_ph(:, this.system(id_ph) == arg2');
                 else
+                    % Fuse all the syntetic obs of the same go_id
                     lookup(this.go_id(id_ph)) = (1 : sum(id_ph))';
+                    for gid = unique(serialize(this.go_id(id_ph))')
+                        id_out = find(arg2 == gid);
+                        if not(isempty(id_out))
+                            synt_ph(:, lookup(arg2(id_out))) = mean(synt_ph(:, (this.go_id(id_ph) == arg2(id_out))), 2, 'omitnan');
+                        end
+                    end
                     synt_ph = synt_ph(:, lookup(arg2));
                 end
             end
@@ -6258,12 +6988,14 @@ classdef Receiver_Work_Space < Receiver_Commons
                 s = all_go_id == obs_set.go_id(i);
                 %[range, xs_loc_t] = this.getSyntObs(go_id);
                 idx_obs = any(obs_set.obs(:, i),2);
-                idx_obs_r = idx_ep_obs(idx_obs); % <- to which epoch in the receiver the observation of the satellites in obesrvation set corresponds?
+                idx_obs_r = idx_ep_obs(idx_obs); % <- to which epoch in the receiver the observation of the satellites in obeservation set corresponds?
                 idx_obs_r_l = false(1, size(range, 2)); % get the logical equivalent
                 idx_obs_r_l(idx_obs_r) = true;
-                range_idx = range(s,:) ~= 0;
+                range_idx = (range(s,:) ~= 0);
+                idx_obs_r_l = idx_obs_r_l &  range_idx;
                 xs_idx = idx_obs_r_l(range_idx);
                 synt_obs(idx_obs, i) = range(s, idx_obs_r);
+                idx_obs = idx_obs & idx_obs_r_l(idx_ep_obs)';
                 if ~isempty(xs_idx)
                     xs_loc(idx_obs, i, :) = permute(xs_loc_t{s}(xs_idx, :),[1 3 2]);
                 end
@@ -6304,6 +7036,15 @@ classdef Receiver_Work_Space < Receiver_Commons
             % SYNTAX
             %   this.setDynamic()
             this.parent.static = false;
+        end
+        
+        function setAsAPriori(this)
+            % Set the internal coordinate as a-priori
+            %
+            % SYNTAX
+            %   this.setAsAPriori
+            rf = Core.getReferenceFrame;
+            rf.setFlag(this.parent.getMarkerName4Ch, rf.FLAG_APRIORI);
         end
         
         function setDoppler(this, dop, wl, id_dop)
@@ -6526,7 +7267,7 @@ classdef Receiver_Work_Space < Receiver_Commons
             if isempty(this.sat.tot)
                 this.sat.tot = zeros(size(this.sat.avail_index));
             end
-            if ~this.isPreProcessed() && apply_dt% this has to be done beacuse dt from phase measurement might be off of an intger number of ambiguities and thus be completely not representative of the actual time offset
+            if ~this.isPreProcessed() && apply_dt % this has to be done because dt from phase measurement might be off of an integer number of ambiguities and thus be completely not representative of the actual time offset
                 this.sat.tot(:, go_id) =   nan2zero(zero2nan(obs)' / Core_Utils.V_LIGHT - this.dt(:, 1));  %<---- check dt with all the new dts field
             else
                 this.sat.tot(:, go_id) =   nan2zero(zero2nan(obs)' / Core_Utils.V_LIGHT);  %<---- check dt with all the new dts field
@@ -6545,10 +7286,9 @@ classdef Receiver_Work_Space < Receiver_Commons
                     c_l_obs = colFirstNonZero(c_obs); % all best obs one each line %% CONSIDER USING ONLY 1 FREQUENCY FOR mm CONSISTENCY
                     this.updateTOT(c_l_obs, i); % update time of travel
                     
-                elseif synt_based % use the synteetc observation to get Time of flight
+                elseif synt_based % use the syntetic observation to get Time of flight
                     c_l_obs = this.getSyntObs(i);
                     this.updateTOT(c_l_obs, i, false); % update time of travel
-                    
                 end
                 %update time of flight times
             end
@@ -6704,7 +7444,7 @@ classdef Receiver_Work_Space < Receiver_Commons
             this.initAvailIndex();
             % for each satellite
             go_id = unique(this.go_id);
-            full_dts_range = nan2zero(zero2nan(this.getDtS(go_id)) + zero2nan(this.getRelClkCorr(go_id))) * Core_Utils.V_LIGHT;
+            full_dts_range = (zero2nan(this.getDtS(go_id)) + zero2nan(this.getRelClkCorr(go_id))) * Core_Utils.V_LIGHT;
             for s = 1: numel(go_id)
                 sat_idx = (this.go_id == go_id(s)) & (this.obs_code(:,1) == 'C' | this.obs_code(:,1) == 'L');
                 for o = find(sat_idx)'
@@ -6756,7 +7496,6 @@ classdef Receiver_Work_Space < Receiver_Commons
                 this.log.addMessage(this.log.indent('Apply the clock error of the receiver'));
             end
             % do not correct anything with 5 second of time desyinc
-            abs(this.dt) > 5;
             id_out = (abs(this.dt) > 0.5 * this.time.getRate);
             bk_dt = this.dt(id_out);
             this.dt(id_out) = 0;
@@ -7159,6 +7898,39 @@ classdef Receiver_Work_Space < Receiver_Commons
             end
         end
         
+        function applyGroupDelayNew(this)
+            if this.group_delay_status_new == 0
+                this.log.addMarkedMessage('Adding code group delays');
+                this.groupDelayNew(1);
+                this.group_delay_status_new = 1; %applied
+            end
+        end
+        
+        function remGroupDelayNew(this)
+            if this.group_delay_status_new == 1
+                this.log.addMarkedMessage('Removing code group delays');
+                this.groupDelayNew(-1);
+                this.group_delay_status_new = 0; %applied
+            end
+        end
+        
+        function groupDelayNew(this, sgn)
+            % . apply group delay corrections for code and phase
+            % measurement when a value if provided from an external source
+            % (Navigational file  or DCB file)
+            cs = Core.getCoreSky;
+            cc = Core.getState.getConstellationCollector;
+            for o = 1:size(this.obs,1)
+                if this.obs_code(o,1) == 'C' | this.obs_code(o,1) == 'L'
+                    o_code = this.obs_code(o,:);
+                    sys_ch = this.system(o);
+                    go_id = this.go_id(o);
+                    bias = cs.getBias(go_id,[sys_ch o_code],this.time);
+                    this.obs(o,:) = nan2zero(zero2nan(this.obs(o,:)) - sign(sgn) * bias');
+                end
+            end
+        end
+        
         %--------------------------------------------------------
         % Earth rotation parameters
         %--------------------------------------------------------
@@ -7224,28 +7996,31 @@ classdef Receiver_Work_Space < Receiver_Commons
             % Upadte azimute elevation into.sat
             % SYNTAX
             %   this.updateAzimuthElevation(<sat>)
-            cc = Core.getState.getConstellationCollector;
-            if nargin < 2 || isempty(go_id)
-                go_id = unique(this.go_id);
-            end
-            if isempty(this.sat.avail_index)
-                this.updateAllAvailIndex();
-                % this.sat.avail_index = true(this.length, cc.getMaxNumSat);
-            end
-            
-            if isempty(this.sat.el)
-                this.sat.el = zeros(this.length, cc.getMaxNumSat);
-            end
-            if isempty(this.sat.az)
-                this.sat.az = zeros(this.length, cc.getMaxNumSat);
-            end
-            for i = go_id(:)'
-                if sum(this.go_id == i) > 0
-                    av_idx = this.sat.avail_index(:, i) ~= 0;
-                    [this.sat.az(av_idx, i), this.sat.el(av_idx, i)] = this.computeAzimuthElevation(i);
+            if this.isEmpty
+                Core.getLogger.addWarning('The receiver is empty!');
+            else
+                cc = Core.getState.getConstellationCollector;
+                if nargin < 2 || isempty(go_id)
+                    go_id = unique(this.go_id);
+                end
+                if isempty(this.sat.avail_index)
+                    this.updateAllAvailIndex();
+                    % this.sat.avail_index = true(this.length, cc.getMaxNumSat);
+                end
+                
+                if isempty(this.sat.el)
+                    this.sat.el = zeros(this.length, cc.getMaxNumSat);
+                end
+                if isempty(this.sat.az)
+                    this.sat.az = zeros(this.length, cc.getMaxNumSat);
+                end
+                for i = go_id(:)'
+                    if sum(this.go_id == i) > 0
+                        av_idx = this.sat.avail_index(:, i) ~= 0;
+                        [this.sat.az(av_idx, i), this.sat.el(av_idx, i)] = this.computeAzimuthElevation(i);
+                    end
                 end
             end
-            
         end
         
         function [mf, el_points] = computeEmpMF(this, el_points, show_fig)
@@ -7371,13 +8146,13 @@ classdef Receiver_Work_Space < Receiver_Commons
             if isempty(this.sat.err_tropo)
                 this.sat.err_tropo = zeros(size(this.sat.avail_index));
             end
-           
+            
             if nargin < 2 || isempty(go_id) || strcmp(go_id, 'all')
                 this.log.addMessage(this.log.indent('Updating tropospheric errors'))
                 
                 go_id = unique(this.go_id)';
             else
-                 go_id = serialize(go_id)';
+                go_id = serialize(go_id)';
             end
             this.sat.err_tropo(:, go_id) = 0;
             
@@ -7467,7 +8242,9 @@ classdef Receiver_Work_Space < Receiver_Commons
                 iono_model_override = 2;
             end
             if iono_model_override == 3 && isempty(atmo.ionex.data) && (isempty(cs.iono) || sum(sum(cs.iono~=0)) > 0)
-                this.log.addError('No iono model present');
+                if this.state.needIonoMap
+                    this.log.addError('No iono model present');
+                end
                 iono_model_override = 1;
             end
             this.updateCoordinates();
@@ -7972,24 +8749,27 @@ classdef Receiver_Work_Space < Receiver_Commons
             %  add or subtract ocean loading from observations
             if true
                 [hoi2, hoi3, bending] = this.computeHOI();
-                
-                cc = Core.getState.getConstellationCollector;
-                for s = 1 : cc.getMaxNumSat()
-                    obs_idx = this.obs_code(:,1) == 'C' |  this.obs_code(:,1) == 'L';
-                    obs_idx = obs_idx & this.go_id == s;
-                    if sum(obs_idx) > 0
-                        for o = find(obs_idx)'
-                            o_idx = this.obs(o, :) ~=0; %find where apply corrections
-                            wl = this.wl(o);
-                            wl3 = wl^3;
-                            wl4 = wl^4;
-                            if  this.obs_code(o,1) == 'L'
-                                this.obs(o,o_idx) = this.obs(o,o_idx) - sign(sgn)*( -1/2 *hoi2(o_idx,s)'*wl3  - 1/3* hoi3(o_idx,s)'*wl4 +  bending(o_idx,s)'*wl4) ./ this.wl(o);
-                            else
-                                this.obs(o,o_idx) = this.obs(o,o_idx) - sign(sgn)*( hoi2(o_idx,s)'*wl3 + hoi3(o_idx,s)'*wl4 + bending(o_idx,s)'*wl4);
+                if any(hoi2)
+                    cc = Core.getState.getConstellationCollector;
+                    for s = 1 : cc.getMaxNumSat()
+                        obs_idx = this.obs_code(:,1) == 'C' |  this.obs_code(:,1) == 'L';
+                        obs_idx = obs_idx & this.go_id == s;
+                        if sum(obs_idx) > 0
+                            for o = find(obs_idx)'
+                                o_idx = this.obs(o, :) ~=0; %find where apply corrections
+                                wl = this.wl(o);
+                                wl3 = wl^3;
+                                wl4 = wl^4;
+                                if  this.obs_code(o,1) == 'L'
+                                    this.obs(o,o_idx) = this.obs(o,o_idx) - sign(sgn)*( -1/2 *hoi2(o_idx,s)'*wl3  - 1/3* hoi3(o_idx,s)'*wl4 +  bending(o_idx,s)'*wl4) ./ this.wl(o);
+                                else
+                                    this.obs(o,o_idx) = this.obs(o,o_idx) - sign(sgn)*( hoi2(o_idx,s)'*wl3 + hoi3(o_idx,s)'*wl4 + bending(o_idx,s)'*wl4);
+                                end
                             end
                         end
                     end
+                else
+                    Core.getLogger.addError(sprintf('No IONEX found for session starting at %s', Core.getState.getSessionsStart.toString('yyyy-mm-dd HH:MM')));
                 end
             else % use gfz zernike map %
                 atmo = Core.getAtmosphere;
@@ -8071,7 +8851,6 @@ classdef Receiver_Work_Space < Receiver_Commons
             this.updateCoordinates();
             atmo = Core.getAtmosphere();
             [hoi_delay2_coeff, hoi_delay3_coeff, bending_coeff] = atmo.getHOIdelayCoeff(this.lat,this.lon, this.sat.az,this.sat.el,this.h_ellips,this.time);
-            
         end
         
         %--------------------------------------------------------
@@ -8517,6 +9296,20 @@ classdef Receiver_Work_Space < Receiver_Commons
         %--------------------------------------------------------
         % MULTIPATH
         %--------------------------------------------------------
+        
+        function ant_mp = getAppliedMPM(this)
+            % Get the currently applied multipath map 
+            %
+            % OUTPUT
+            %   mp.type              type of applied multipath (if 0 no mp)
+            %   mp.time_lim          reference time of the applied map
+            %   mp.(sys_c).(trk).map current map according to Core.getState.flag_rec_mp
+            %
+            % SYNTAX 
+            %   [applied_map, type] = getAppliedMPM(this,)
+            
+            ant_mp = GNSS_Station.getCurrentMPM(this.ant_mp);
+        end
         
         function [ant_mp, flag_ok] = getDiffMP(this)
             % Get the multipath to be applied
@@ -8964,14 +9757,28 @@ classdef Receiver_Work_Space < Receiver_Commons
             % computing nominal_time
             nominal_time_zero = floor(this.time.first.getMatlabTime() * 24)/24; % start of day
             rinex_time = this.time.getRefTime(nominal_time_zero); % seconds from start of day
-            nominal_time = round(rinex_time / this.time.getRate) * this.time.getRate;
+            min_rate = min(1, this.time.getRate);
+            nominal_time = round(rinex_time / min_rate) * min_rate;
             ref_time = (nominal_time(1) : this.time.getRate : nominal_time(end))';
+            
+            [~, id_not_empty, id_ok] = intersect(round(ref_time/this.time.getRate), round(nominal_time/this.getRate));
+            
+            % if there are observations at a different rate than the
+            % nominal (median) they will be removed from the receiver to
+            % allow proper processing
+            n_out = numel(nominal_time) - numel(id_ok);
+            
+            if n_out > 0
+                nominal_time = nominal_time(id_ok);
+                this.keepEpochs(id_ok);
+                rinex_time = this.time.getRefTime(nominal_time_zero); % seconds from start of day
+                log.addWarning(sprintf('%d epochs seem out of sync, the receiver is mostly @%gs but\n some observations are at a different rate, removing them to avoid problems', n_out, this.time.getRate))
+            end
             
             % reordering observations filling empty epochs with zeros;
             this.time = GPS_Time(nominal_time_zero, ref_time, this.time.isGPS(), 2);
             this.time.toUnixTime;
             
-            [~, id_not_empty] = intersect(round(ref_time/this.time.getRate), round(nominal_time/this.getRate));
             id_empty = setdiff(1 : numel(nominal_time), id_not_empty);
             
             time_desync = nan(size(nominal_time));
@@ -9167,7 +9974,7 @@ classdef Receiver_Work_Space < Receiver_Commons
                 this.sat.az  = zeros(this.time.length, cc.getMaxNumSat());
                 this.sat.el  = zeros(this.time.length, cc.getMaxNumSat());
                 this.sat.solid_earth_corr  = zeros(this.time.length, cc.getMaxNumSat());
-                log.addMessage(log.indent('Applying satellites Differential Code Biases (DCB)'))
+                log.addMessage(log.indent('Applying satellites code biases'))
                 % if not applied apply group delay
                 this.applyGroupDelay();
                 log.addMessage(log.indent('Applying satellites clock errors and eccentricity dependent relativistic correction'))
@@ -9175,7 +9982,16 @@ classdef Receiver_Work_Space < Receiver_Commons
                 % if
                 %this.parent.static = 0;
                 if this.isStatic()
-                    s0 = this.initStaticPositioning(sys_c);
+                    if this.NEW_ISP
+                        s0 = this.initStaticPositioningNew(sys_c);
+                        if s0 == 0
+                            log.addError('The new init positioning failed, trying to go legacy');
+                            this.dt = 0;
+                            s0 = this.initStaticPositioning(sys_c);
+                        end
+                    else
+                        s0 = this.initStaticPositioning(sys_c);
+                    end
                 else
                     s0 = this.initDynamicPositioning();
                 end
@@ -9193,6 +10009,10 @@ classdef Receiver_Work_Space < Receiver_Commons
             %   s0
             %
             %   Get positioning using code observables
+            
+            % USEFUL TESTING RINEX:
+            %  - EURC0010.18o
+            
                         
             if nargin < 2 || isempty(sys_list)
                 sys_list = this.getActiveSys();
@@ -9216,6 +10036,7 @@ classdef Receiver_Work_Space < Receiver_Commons
                 end
                 
                 if sum(this.hasAPriori) == 0 || isempty(this.xyz) %%% if no apriori information on the position
+                    Core.getReferenceFrame.setFlag(this.parent.getMarkerName4Ch, 0);
                     obs_set = Observation_Set();
                     if this.isMultiFreq() %% case multi frequency
                         for sys_c = sys_list
@@ -9230,67 +10051,94 @@ classdef Receiver_Work_Space < Receiver_Commons
                         end
                     end
                     s0 = this.coarsePositioning(obs_set);
+                    this.dt = this.dt * 0; % don't use the clock estimated by coarse positioning
                 end
                 
+                if s0 > 1e3 % If the coarse positioning is too bad, there is nothing to do. Positioning is not possible.
+                    s0 = 0; % Solution failed
+                end
                 if s0 > 0
                     this.updateAllAvailIndex();
-                    this.updateAllTOT();
                     this.updateAzimuthElevation(all_go_id)
                     if ~this.isMultiFreq()
                         this.updateErrIono(all_go_id);
                     end
                     this.updateErrTropo(all_go_id);
+                    this.updateAllTOT();
                     log.addMessage(log.indent('Improving estimation'))
 
                     corr = 2000;
                     rf_changed = false;
                    
-
+                    % If the a-priori coordinates are valid, perform a
+                    % rough filtering of bad pseudo-ranges based on the
+                    % difference with the synthetic one
+                    this.remInitialBadPr(50);
+                
                     if ~this.hasGoodApriori()
                         [corr, s0tmp] = this.codeStaticPositioning(sys_list, this.id_sync, this.state.cut_off);
-                        %                 %----- NEXUS DEBUG
-                        %                 this.adjustPrAmbiguity();
-                        %                 this.codeStaticPositioning(this.id_sync, 15);
-                        %------
+                        log.addMessage(log.indent(sprintf('New solution s0 = %.4f using %d epochs\nCorrecting coarse solution by %.3f meters', s0, numel(this.id_sync), sqrt(sum(corr.^2)))));
                         
-                        % This sensor works using the first LS adjustment
-                        thr_multiplier = 2;
-                        [pr , id_pr] = this.getPseudoRanges;
-                        sensor = pr - this.getSyntPrObs;
+                        % Apply the clock to realign data
+                        % this clock apply have been added processing the permanent station 
+                        % with file EURC0010.18o that have almost 0.1s of clock error
                         
-                        % Perform LS on all the data
-                        this.remBadTracking(sys_list);
-                        this.updateAllTOT();
-                        log.addMessage(log.indent('Final estimation'))
-                        i = 1;
-                        while max(abs(corr)) > 0.2 && i < 3
-                            rw_loops = 0; % number of re-weight loops
-                            this.getSatCache(all_go_id, true); % force cache update of satellite orbits here I'm computing it for all the id_sync
-                            [corr, s0] = this.codeStaticPositioning(sys_list, this.id_sync, this.state.cut_off, rw_loops); % no reweight
-                            % final estimation of time of flight
-                            this.updateAllAvailIndex()
-                            this.updateAllTOT(true);
-                            i = i+1;
+                        % Save init_positioning clock
+                        this.dt_ip = this.dt_ip + simpleFill1D(this.dt, this.dt == 0, 'linear') + this.dt_pr; 
+                        % smooth clock estimation
+                        if perc(abs(this.dt), 0.97) > 1e-7 % 30 meters : is it only useful to reallining receivers that have a large drifts from the nominal value
+                            this.smoothAndApplyDt(0, false, false);
                         end
-                        
-                        % If the final estimation is worse than then the
-                        % previous one perform outlier rejection using the old sensor
-                        if s0tmp < (s0 -2) && s0 > 6
-                            sensor = bsxfun(@minus, sensor, median(sensor, 2, 'omitnan'));
-                            id_ko = Core_Utils.snoopGatt(sensor, 20*thr_multiplier, 10*thr_multiplier); % flag above 20 meters
-                            if any(id_ko(:))
-                                n_out = sum(id_ko(:)) ;
-                            end
-                            pr(id_ko) = nan;
-                            if (sum(id_ko(:)) / sum(~isnan(pr(:)))) < 0.5 % I've flagged less than 50% of data
-                                this.setPseudoRanges(pr, id_pr);
-                                log.addWarning(sprintf('%d pseudo-ranges have been removed to stabilize the solution', sum(id_ko(:))));
-                                % Redo the estimation
-                                rw_loops = 0;
+                            
+                        % %----- NEXUS DEBUG
+                        % this.adjustPrAmbiguity();
+                        % this.codeStaticPositioning(this.id_sync, 15);
+                        %------
+                        if s0tmp > 0
+                            % This sensor works using the first LS adjustment
+                            thr_multiplier = 2;
+                            [pr , id_pr] = this.getPseudoRanges;
+                            sensor = bsxfun(@minus, pr - this.getSyntPrObs, this.dt * Core_Utils.V_LIGHT);
+                            
+                            % Perform LS on all the data
+                            this.updateAllAvailIndex();
+                            this.updateAzimuthElevation;
+                            this.updateErrTropo();
+                            this.updateAllTOT();
+                            
+                            this.remBadTracking(sys_list);
+                            this.updateAllAvailIndex()
+
+                            log.addMessage(log.indent('Final estimation'))
+                            i = 1;
+                            while max(abs(corr)) > 0.2 && i < 3
+                                rw_loops = 0; % number of re-weight loops
+                                this.getSatCache(all_go_id, true); % force cache update of satellite orbits here I'm computing it for all the id_sync
                                 [corr, s0] = this.codeStaticPositioning(sys_list, this.id_sync, this.state.cut_off, rw_loops); % no reweight
                                 % final estimation of time of flight
-                                this.updateAllAvailIndex()
                                 this.updateAllTOT(true);
+                                i = i+1;
+                            end
+                            
+                            % If the final estimation is worse than then the
+                            % previous one perform outlier rejection using the old sensor
+                            if s0tmp < (s0 -2) && s0 > 6
+                                sensor = bsxfun(@minus, sensor, median(sensor, 2, 'omitnan'));
+                                id_ko = Core_Utils.snoopGatt(sensor, 20*thr_multiplier, 10*thr_multiplier); % flag above 20 meters
+                                if any(id_ko(:))
+                                    n_out = sum(id_ko(:)) ;
+                                end
+                                pr(id_ko) = nan;
+                                if (sum(id_ko(:)) > 0) && ((sum(id_ko(:)) / sum(~isnan(pr(:)))) < 0.5) % I've flagged less than 50% of data
+                                    this.setPseudoRanges(pr, id_pr);
+                                    log.addWarning(sprintf('%d pseudo-ranges have been removed to stabilize the solution', sum(id_ko(:))));
+                                    % Redo the estimation
+                                    rw_loops = 0;
+                                    [corr, s0] = this.codeStaticPositioning(sys_list, this.id_sync, this.state.cut_off, rw_loops); % no reweight
+                                    % final estimation of time of flight
+                                    this.updateAllAvailIndex()
+                                    this.updateAllTOT(true);
+                                end
                             end
                         end
                     else
@@ -9367,11 +10215,131 @@ classdef Receiver_Work_Space < Receiver_Commons
                         % restore flag in reference frame object
                         rf.setFlag(this.parent.getMarkerName4Ch, 3);
                     end
-                    log.addMessage(log.indent(sprintf('Final estimation sigma0 %.3f m', s0) ))
+                    log.addMessage(log.indent(sprintf('Final estimation sigma0 %.3f m, using %d epochs', s0, numel(this.id_sync)) ));
                 else
-                    log.addMessage(log.indent(sprintf('A good a-rpiori is set, skipping pre estimation of the coordinates') ))
+                    log.addMessage(log.indent(sprintf('A good a-priori is set, skipping pre estimation of the coordinates') ));
                 end
             end
+        end
+
+        function s0 = initStaticPositioningNew(this, sys_list)
+            % SYNTAX
+            %   this.StaticPositioning(sys_c)
+            %
+            % INPUT
+            % sys_c : sys charachet list of constellations to be used
+            %
+            % OUTPUT:
+            %   s0
+            %
+            %   Get positioning using code observables
+                        
+            if nargin < 2 || isempty(sys_list)
+                sys_list = this.getActiveSys();
+            end
+            log = Core.getLogger;
+            if this.isEmpty()
+                log.addError('Static positioning failed: the receiver object is empty');
+            else
+                if isempty(this.id_sync)
+                    this.id_sync = 1 : this.time.length;
+                end
+                all_go_id = unique(this.go_id(ismember(this.system, sys_list)));
+                
+                % check if the epochs are present
+                % getting the observation set that is going to be used in
+                % setUPSA
+                
+                % 
+                if sum(this.hasAPriori) ~= 0 %%% if there is an apriori information on the position
+                    s0 = iif(this.hasGoodApriori, 0.1, 5);
+                    this.xyz = Core.getReferenceFrame.getCoo(this.parent.getMarkerName4Ch,this.time.getCentralTime);
+                end
+                % if positioni is not fixed
+                if ~(this.isFixed || this.isFixedPrepro)
+                    if sum(this.hasAPriori) == 0 || isempty(this.xyz) %%% if no apriori information on the position
+                        sys_list_c = Core_Utils.getPrefSys(sys_list);
+                        
+                        obs_set = Observation_Set();
+                        if this.isMultiFreq() %% case multi frequency
+                            for sys_c = sys_list_c
+                                obs_set.merge(this.getPrefIonoFree('C', sys_c));
+                            end
+                        else
+                            for sys_c = sys_list_c
+                                f = this.getFreqs(sys_c);
+                                if ~isempty(f)
+                                    obs_set.merge(this.getPrefObsSetCh(['C' num2str(f(1))], sys_c));
+                                end
+                            end
+                        end
+                        s0 = this.coarsePositioning(obs_set);
+                    end
+                    if s0 > 0
+                        this.updateAllAvailIndex();
+                        this.updateAllTOT();
+                        % estimates dt coarse
+                        this.coarseDtEstimation();
+                        this.updateAllTOT();
+                        this.updateAzimuthElevation(all_go_id)
+                        if ~this.isMultiFreq()
+                            this.updateErrIono(all_go_id);
+                        end
+                        this.updateErrTropo(all_go_id);
+                        log.addMessage(log.indent('Improving estimation'))
+                        this.updateAllTOT();
+                        [dpos, s0] = this.codeStaticPositioning([],[],[],0);
+                        if s0 > 0
+                            this.updateAllTOT();
+                            this.updateErrTropo(all_go_id);
+                            [dpos, s0] = this.codeStaticPositioning([],[],[],3);
+                        end
+                    end
+                else
+                    this.updateAllAvailIndex();
+                    this.updateAllTOT();
+                    this.coarseDtEstimation();
+                    this.updateAllAvailIndex();
+                    this.updateAllTOT();
+                    this.updateAzimuthElevation(all_go_id)
+                    if ~this.isMultiFreq()
+                        this.updateErrIono(all_go_id);
+                    end
+                    this.updateErrTropo(all_go_id);
+                    [dpos, s0] = this.codeStaticPositioning([],[],[],0);
+                    if s0 > 0
+                        this.updateAllTOT();
+                        this.updateErrTropo(all_go_id);
+                        [dpos, s0] = this.codeStaticPositioning([],[],[],3);
+                    end
+                end
+            end
+        end
+        
+        function coarseDtEstimation(this)
+            sys_list = unique(this.system);
+            %only use one system  -> preferred order is GRECJI
+            sys_list = Core_Utils.getPrefSys(sys_list);
+            
+            % get obscode
+            obs_set = Observation_Set();
+            if this.isMultiFreq() %% case multi frequency
+                for sys_c = sys_list
+                    obs_set.merge(this.getPrefIonoFree('C', sys_c));
+                end
+            else
+                for sys_c = sys_list
+                    f = this.getFreqs(sys_c);
+                    obs_set.merge(this.getPrefObsSetCh(['C' num2str(f(1))], sys_c));
+                end
+            end
+            all_go_id = unique(obs_set.go_id);
+            
+            sat_cache = this.getSatCache(all_go_id,true);
+            [synt_obs] = this.getSyntTwin(obs_set);
+            diff_obs = zero2nan(obs_set.obs) - zero2nan(synt_obs);
+            dt = median(diff_obs ,2,'omitnan');
+            this.dt = nan2zero(dt/Core_Utils.V_LIGHT);
         end
         
         function s0 = coarsePositioning(this, obs_set)
@@ -9416,7 +10384,7 @@ classdef Receiver_Work_Space < Receiver_Commons
             while max(abs(dpos)) > 10
                 this.getSatCache(all_go_id, true); % force cache update of satellite orbits
                 [dpos, s0] = this.codeStaticPositioning(sys_list, ep_coarse, [], 0);
-                
+                log.addMessage(log.indent(sprintf('New solution s0 = %.4f using %d epochs\nCorrecting coarse solution by %.3f meters', s0, numel(ep_coarse), sqrt(sum(dpos.^2)))));
                 if sum(abs(dpos)) > 1e8
                     % Solution is diverging => exit
                     log.addError('Data are too bad, positioning is not possible!');
@@ -9431,7 +10399,8 @@ classdef Receiver_Work_Space < Receiver_Commons
                 if ~this.isMultiFreq()
                     this.updateErrIono(all_go_id);
                 end
-                this.codeStaticPositioning(sys_list, ep_coarse, 15, 0);
+                [dpos, s0] = this.codeStaticPositioning(sys_list, ep_coarse, 15, 0);
+                log.addMessage(log.indent(sprintf('New solution s0 = %.4f using %d epochs\nCorrecting coarse solution by %.3f meters', s0, numel(ep_coarse), sqrt(sum(dpos.^2)))));                
             end
             this.id_sync = [];
             this.updateErrTropo(all_go_id);
@@ -9538,90 +10507,105 @@ classdef Receiver_Work_Space < Receiver_Commons
             end
             ls.setUpCodeStatic( this, sys_list, id_sync, cut_off);
             ls.Astack2Nstack();
-            [x, res, s0] = ls.solve();
+            [x, res, s0] = ls.solve(true);
 
-            id_ko = abs(ls.res) > Core.getState.getMaxCodeErrThrPP;
-            if nargin < 5 || isempty(num_reweight)
-                % loop if:
-                %  - there are big outliers > 3 times the thr
-                %  - outliers + (s0 > 1)
-                if any(abs(ls.res) > 3 * Core.getState.getMaxCodeErrThrPP) || (any(id_ko) && (s0 > 1))
-                    num_reweight = 4;
-                else
-                    num_reweight = 0;                    
-                end
-            end
-            
-            log = Core.getLogger;
-            if num_reweight > 0
-                % show this message only in case of iterations
-                log.addMessage(log.indent(sprintf('PREPRO s0 = %.4f (first estimation)', s0)));
-            end
-            cc = Core.getConstellationCollector;
-            % REWEIGHT ON RESIDUALS AND OUTLIER REJECTION
-            for i = 1 : num_reweight
-                flag_recompute = false;
-                if i == num_reweight - 1
-                    id_ko = abs(ls.res) > 2 * Core.getState.getMaxCodeErrThrPP;
-                    % snoopGatt cannot be used in this way, arcs should be splitted
-                    %id_ko = Core_Utils.snoopGatt(ls.res, 2 * Core.getState.getMaxCodeErrThrPP, Core.getState.getMaxCodeErrThrPP);
-                    if any(~id_ko)
-                        flag_recompute = true;
-                        ls.remObs(id_ko);
-                    end
-                elseif i == num_reweight
-                    id_ko = abs(ls.res) > Core.getState.getMaxCodeErrThrPP;
-                    % snoopGatt cannot be used in this way, arcs should be splitted
-                    %id_ko = Core_Utils.snoopGatt(ls.res, Core.getState.getMaxCodeErrThrPP, Core.getState.getMaxCodeErrThrPP/2);
-                    if any(~id_ko)
-                        flag_recompute = true;
-                        ls.remObs(id_ko);
-                    end
-                else
-                    flag_recompute = true;
-                    ls.reweightHuber();
-                end
-                if flag_recompute
-                    ls.Astack2Nstack();
-                    [x, res, s0] = ls.solve();
-                    log.addMessage(log.indent(sprintf('PREPRO s0 = %.4f (iteration)', s0)));
-                else
-                    log.addMessage(log.indent(sprintf('PREPRO s0 = %.4f (iteration skipped)', s0)));
-                end
-            end
-            
-            if isempty(x)
+            if isinf(s0)
                 dpos = [0 0 0];
                 s0 = 0;
             else
-                dpos = [x(x(:,2) == 1,1) x(x(:,2) == 2,1) x(x(:,2) == 3,1)];
-                if isempty(dpos)
-                    dpos = [0 0 0];
+                id_ko = abs(ls.res) > Core.getState.getMaxCodeErrThrPP;
+                if nargin < 5 || isempty(num_reweight)
+                    % loop if:
+                    %  - there are big outliers > 3 times the thr
+                    %  - outliers + (s0 > 1)
+                    if any(abs(ls.res) > 3 * Core.getState.getMaxCodeErrThrPP) || (any(id_ko) && (s0 > 1))
+                        num_reweight = 4;
+                    else
+                        num_reweight = 0;
+                    end
                 end
-                this.xyz = repmat(this.getMedianPosXYZ(), size(dpos,1),1) + dpos;
-                dt = x(x(:,2) == 6,1);
-                this.dt = zeros(this.time.length,1);
-                this.dt(ls.true_epoch,1) = dt ./ Core_Utils.V_LIGHT;
-                isb = x(x(:,2) == 4,1);
                 
-                id_sync = ls.true_epoch;
-                this.id_sync = id_sync;
-                                       
-                [sys, prn] = cc.getSysPrn(ls.sat_go_id);
-                obs_code = ls.obs_code;
-                rec_coo = Coordinates.fromXYZ(this.getMedianPosXYZ, this.getTime.getCentralTime);
-                this.sat.res = Residuals();
-                this.sat.res.import(2, this.time.getEpoch(id_sync), res(id_sync, ls.sat_go_id), prn, obs_code, rec_coo);
+                log = Core.getLogger;
+                if num_reweight > 0
+                    % show this message only in case of iterations
+                    log.addMessage(log.indent(sprintf('PREPRO s0 = %.4f (first estimation)', s0)));
+                end
+                cc = Core.getConstellationCollector;
+                % REWEIGHT ON RESIDUALS AND OUTLIER REJECTION
+                for i = 1 : num_reweight
+                    flag_recompute = false;
+                    if i == num_reweight - 1
+                        id_ko = abs(ls.res) > 2 * Core.getState.getMaxCodeErrThrPP;
+                        % snoopGatt cannot be used in this way, arcs should be splitted
+                        %id_ko = Core_Utils.snoopGatt(ls.res, 2 * Core.getState.getMaxCodeErrThrPP, Core.getState.getMaxCodeErrThrPP);
+                        if any(~id_ko)
+                            flag_recompute = true;
+                            ls.remObs(id_ko);
+                        end
+                    elseif i == num_reweight
+                        id_ko = abs(ls.res) > Core.getState.getMaxCodeErrThrPP;
+                        % snoopGatt cannot be used in this way, arcs should be splitted
+                        %id_ko = Core_Utils.snoopGatt(ls.res, Core.getState.getMaxCodeErrThrPP, Core.getState.getMaxCodeErrThrPP/2);
+                        if any(~id_ko)
+                            flag_recompute = true;
+                            ls.remObs(id_ko);
+                        end
+                    else
+                        flag_recompute = true;
+                        ls.reweightHuber();
+                    end
+                    if flag_recompute
+                        ls.Astack2Nstack();
+                        [x, res, s0] = ls.solve(true);
+                        log.addMessage(log.indent(sprintf('PREPRO s0 = %.4f (iteration)', s0)));
+                    else
+                        log.addMessage(log.indent(sprintf('PREPRO s0 = %.4f (iteration skipped)', s0)));
+                    end
+                end
                 
-                this.quality_info.s0_ip = s0;
-                this.quality_info.n_epochs = ls.n_epochs;
-                this.quality_info.n_obs = size(ls.epoch, 1);
-                this.quality_info.n_out = sum(this.sat.outliers_ph_by_ph(:));
-                this.quality_info.n_spe = length(sum(~isnan(res)));
-                this.quality_info.n_sat = length(unique(ls.sat));
-                this.quality_info.n_sat_max = max(hist(unique(ls.epoch * 1000 + ls.sat), ls.n_epochs));
-                this.quality_info.fixing_ratio = 0;               
-                this.generateNumSatPerEpochU1(ls ,res, id_sync)
+                if isempty(x) || isinf(s0) || isempty(res)
+                    log.addMessage(log.indent(sprintf('PREPRO s0 = %.4f (iteration skipped)', s0)));
+                    dpos = [0 0 0];
+                    s0 = 0;
+                else
+                    dpos = [x(x(:,2) == 1,1) x(x(:,2) == 2,1) x(x(:,2) == 3,1)];
+                    if isempty(dpos)
+                        dpos = [0 0 0];
+                    end
+                    if isempty(this.xyz)
+                        this.xyz = [0 0 0];
+                    end
+                    this.xyz = repmat(this.getMedianPosXYZ(), size(dpos,1),1) + dpos;
+                    dt = x(x(:,2) == 6,1);
+                    this.dt = zeros(this.time.length,1);
+                    try
+                        this.dt(ls.true_epoch,1) = dt ./ Core_Utils.V_LIGHT;
+                        isb = x(x(:,2) == 4,1);
+                        
+                        id_sync = ls.true_epoch;
+                        this.id_sync = id_sync;
+                        
+                        [sys, prn] = cc.getSysPrn(ls.sat_go_id);
+                        obs_code = ls.obs_code;
+                        rec_coo = Coordinates.fromXYZ(this.getMedianPosXYZ, this.getTime.getCentralTime);
+                        this.sat.res = Residuals();
+                        this.sat.res.import(2, this.time.getEpoch(id_sync), res(id_sync, ls.sat_go_id), prn, obs_code, rec_coo);
+                        
+                        this.quality_info.s0_ip = s0;
+                        this.quality_info.n_epochs = ls.n_epochs;
+                        this.quality_info.n_obs = size(ls.epoch, 1);
+                        this.quality_info.n_out = sum(this.sat.outliers_ph_by_ph(:));
+                        this.quality_info.n_spe = length(sum(~isnan(res)));
+                        this.quality_info.n_sat = length(unique(ls.sat));
+                        this.quality_info.n_sat_max = max(hist(unique(ls.epoch * 1000 + ls.sat), ls.n_epochs));
+                        this.quality_info.fixing_ratio = 0;
+                        this.generateNumSatPerEpochU1(ls ,res, id_sync)
+                    catch ex
+                        % keyboard
+                        Core_Utils.printEx(ex);
+                        s0 = 0;
+                    end
+                end
             end
         end
         
@@ -10025,7 +11009,7 @@ classdef Receiver_Work_Space < Receiver_Commons
                     if this.hasGoodApriori
                         % In this case I have to remove the clock to be
                         % able to perform outlier rejection
-                        [is_pr_jumping, is_ph_jumping] = this.correctTimeDesync(false);
+                        [is_pr_jumping, is_ph_jumping] = this.correctTimeDesync(~Receiver_Work_Space.DT_CORRECTION_TIME_DESYNC);
                     else
                         [is_pr_jumping, is_ph_jumping] = this.correctTimeDesync(true);
                     end
@@ -10069,7 +11053,7 @@ classdef Receiver_Work_Space < Receiver_Commons
                             %                         this.codeStaticPositioning();
                             
                             % if the clock is stable I can try to smooth more => this.smoothAndApplyDt([0 this.length/2]);
-                            this.dt_ip = simpleFill1D(this.dt, this.dt == 0, 'linear') + this.dt_pr; % save init_positioning clock
+                            this.dt_ip = this.dt_ip + simpleFill1D(this.dt, this.dt == 0, 'linear') + this.dt_pr; % save init_positioning clock
                             % smooth clock estimation
                             if perc(abs(this.dt), 0.97) > 1e-7 % 30 meters : is it only useful to reallining receivers that have a large drifts from the nominal value
                                 this.smoothAndApplyDt(0, is_pr_jumping, is_ph_jumping);
@@ -10119,18 +11103,38 @@ classdef Receiver_Work_Space < Receiver_Commons
                                 end
                                 
                                 this.remUnderSnrThr([], this.state.getScaledSnrThr());
-                                this.detectOutlierMarkCycleSlip();
-                                this.remShortArc(this.state.getMinArc(this.time.getRate));
-                                this.codeStaticPositioning(sys_list); % <== to be substituted with U2
+                                if this.NEW_OUT_DET
+                                    this.detectOutlierMarkCycleSlipNew();
+                                else
+                                    this.detectOutlierMarkCycleSlip();
+                                end
+                                [dpos, s0] = this.codeStaticPositioning(sys_list); % <== to be substituted with U2
+                                if s0 < 3
+                                    log.addStatusOk(log.indent(sprintf('End of pre-processing s0 = %.4f\nCorrecting solution by %.3f meters', s0, sqrt(sum(dpos.^2)))));
+                                else
+                                    log.addWarning(log.indent(sprintf('End of pre-processing s0 = %.4f\nCorrecting solution by %.3f meters', s0, sqrt(sum(dpos.^2)))));
+                                end
                                 this.dt_ip = this.dt_ip + this.dt; % save init_positioning clock
                                 % smooth clock estimation
-                                this.smoothAndApplyDt(0, false, false,0);
+                                this.smoothAndApplyDt(0, false, false, 0);
                                 this.shiftToNominal;
                                 this.getSatCache([], true);
+                               
                                 if this.state.isCombineTrk
-                                    this.combinePhTrackings();
+                                    % Check if multiple trackings are really present (otherwise do not repeat cycle-slip detection)
+                                    status = this.combinePhTrackings();
+                                    if status
+                                        if this.NEW_OUT_DET
+                                            this.detectOutlierMarkCycleSlipNew();
+                                        else
+                                            this.detectOutlierMarkCycleSlip();
+                                        end
+                                    end
                                 end
-                                this.detectOutlierMarkCycleSlip();
+                                if this.CS_REPAIR
+                                    this.cycleSlipRepair();
+                                end
+                                this.remShortArc(this.state.getMinArc(this.time.getRate));
                                 %this.coarseAmbEstimation();
                                 this.pp_status = true;
                             end
@@ -10145,7 +11149,7 @@ classdef Receiver_Work_Space < Receiver_Commons
         
         function pass = checkMinAvailEpoch(this)
             % check if minimum percenatge of epoch is available, otherwise
-            % stop porcessing
+            % stop processing
             %
             % SYNTAX:
             %    this.checkMinAvailEpoch()
@@ -10198,7 +11202,7 @@ classdef Receiver_Work_Space < Receiver_Commons
                     end
                 end
                 if nargin < 3
-                    id_sync = (1 : this.time.length())';
+                    id_sync = iif(isempty(this.id_sync), (1 : this.time.length())', this.id_sync);
                 end
                 
                 id_sync_in = id_sync;
@@ -10667,7 +11671,7 @@ classdef Receiver_Work_Space < Receiver_Commons
                     else
                          param_selection =  [param_selection;
                             LS_Manipulator_new.PAR_REC_CLK;
-                            LS_Manipulator_new.PAR_REC_PPB;
+                           % LS_Manipulator_new.PAR_REC_PPB;
                             ];
                     end
                 end
@@ -10813,6 +11817,8 @@ classdef Receiver_Work_Space < Receiver_Commons
                         [y_coo_time1, y_coo_time2] = ls.getTimePar(idx_y);
                         idx_save = Core_Utils.timeIntersect(y_coo_time1, y_coo_time2, int_lim.first, int_lim.last);
                         coy = mean(y_coo(idx_save));
+                    else
+                        coy = 0;
                     end
                     
                     idx_z = ls.class_par == ls.PAR_REC_Z;
@@ -10952,7 +11958,7 @@ classdef Receiver_Work_Space < Receiver_Commons
                     % Push quality info from LS object to rec
                     this.quality_info.s0 = s0;
                     this.quality_info.n_epochs = numel(unique(ls.time_par));
-                    this.quality_info.n_obs = size(ls.obs, 1);
+                    this.quality_info.n_obs = sum(ls.outlier_obs ~= 0);
                     this.quality_info.n_out = sum(this.sat.outliers_ph_by_ph(:));
                     this.quality_info.n_sat = length(unique(ls.sat_par));
                     this.quality_info.n_sat_max = uint16(max(hist(double(unique(uint32(ls.time_obs.getNominalTime().getRefTime(ls.time_obs.minimum.getMatlabTime) * 1000) + uint32(ls.satellite_obs))), uint32(this.quality_info.n_epochs))));
@@ -12153,8 +13159,8 @@ classdef Receiver_Work_Space < Receiver_Commons
         function fh_list = showDataAvailability(this, sys_c, band)
             % Plot all the satellite seen by the system
             % SYNTAX this.plotDataAvailability(sys_c)
-            
             if this.isEmpty
+                fh_list = [];
                 Core.getLogger.addWarning(sprintf('Receiver %s is empty', this.parent.getMarkerName4Ch));
             else
                 cc = Core.getState.getConstellationCollector;
@@ -12626,6 +13632,356 @@ classdef Receiver_Work_Space < Receiver_Commons
             if idx_f == 0
                 fh_list = [];
             end
+        end
+    end
+    
+    methods (Static)
+        function  [o_idx, cs_idx] = outlierCyscleSlipDetect(td_phr, wl, ol_thr, cs_thr)
+            o_idx = (abs(td_phr(1,:)) > ol_thr & abs(td_phr(2,:)) > ol_thr) |  (isnan(td_phr(1,:)) & abs(td_phr(2,:)) > ol_thr) |  (abs(td_phr(1,:)) > ol_thr & isnan(td_phr(2,:)));
+            cs_idx = abs(td_phr(1,:) ./ wl) > cs_thr & ~isnan(td_phr(2,:));
+        end
+        
+        
+        
+        function detectOutlierMarkCycleSlipMultiReceiver(rec_work_list)
+            state = Core.getCurrentSettings();
+            ol_thr = 0.10; % 10cm
+            cs_thr = 0.7 * state.getCycleSlipThr(); % CYCLE SLIP THR
+            % detect outlier and cycle slips based on a network of
+            % receivers
+            cc =  Core.getConstellationCollector;
+            n_rec = numel(rec_work_list);
+            n_sat = length(cc.prn);
+            
+            % get union of all times and index of the receiver times
+            [p_time, id_sync] = Receiver_Commons.getSyncTimeExpanded(rec_work_list);
+            % get union of all obervation code
+            n_time = length(p_time);
+            % initialize dt receiver and satellite
+            state = Core.getCurrentSettings();
+            
+            
+            obs = {};
+            el_obs = {};
+            id_obs = {};
+            go_id_obs = {};
+            wl_obs = {};
+            apr_std_obs = {};
+            is_ph_obs = {};
+            %fill obs
+            rs = Receiver_Settings();
+            for r = 1 : n_rec
+                rec_work_list(r).sat.outliers_ph_by_ph = false(size(rec_work_list(r).obs,1),sum(rec_work_list(r).obs_code(:,1) =='L'));
+                rec_work_list(r).sat.cycle_slip_ph_by_ph = false(size(rec_work_list(r).obs,1),sum(rec_work_list(r).obs_code(:,1) =='L'));
+                [ph, wl,idx_ph] = rec_work_list(r).getPhases();
+                ph = zero2nan(ph) - zero2nan(rec_work_list(r).getSyntPhases);
+                [pr, idx_pr] = rec_work_list(r).getPseudoRanges();
+                pr = zero2nan(pr) - zero2nan(rec_work_list(r).getSyntPrObs);
+                obs{r} = [ph pr];
+                el_obs{r} = rec_work_list(r).sat.el;
+                id_obs{r} = [find(idx_ph); find(idx_pr)];
+                go_id_obs{r} =  [rec_work_list(r).go_id(idx_ph); rec_work_list(r).go_id(idx_pr)];
+                wl_obs{r} = [rec_work_list(r).wl(idx_ph); rec_work_list(r).wl(idx_pr)];
+                o_codes =  [[rec_work_list(r).system(idx_ph)' rec_work_list(r).obs_code(idx_ph,:)]; [rec_work_list(r).system(idx_pr)' rec_work_list(r).obs_code(idx_pr,:)]];;
+                apr_std = zeros(size(o_codes,1),1);
+                for i = 1 : length(apr_std)
+                    apr_std(i) = rs.getStd(o_codes(i,1), o_codes(i,2:end));      
+                end
+        
+                apr_std_obs{r} = apr_std;
+                is_ph_obs{r} = o_codes(:,2) == 'L';
+            end
+            ddt_rec = zeros(n_time, n_rec);
+            ddt_sat = zeros(n_time, n_sat);
+                        dt_iono = zeros(n_time, n_sat,n_rec);
+
+            % run the estimation & detetction
+            for i = 1 : (n_time-1)
+                
+                valid_rec = find(id_sync(i,:) ~=0 & id_sync(i+1,:) ~= 0);
+                d_ph = [];
+                rec_id = [];
+                go_id = [];
+                wl_id = [];
+                el = [];
+                apr_std = [];
+                is_ph = [];
+                for r = valid_rec
+                    ob = obs{r};
+                    d_p = ob(i+1,:) - ob(i,:);
+                    g = go_id_obs{r};
+                    ip = is_ph_obs{r};
+                    
+                    is_valid = ~isnan(d_p)';
+                    [df ] = setdiff(unique(g(~ip & is_valid)),unique(g(ip & is_valid))); % remove code only observations
+                    [is_only_pr] = ismember(g(is_valid),df);
+                    is_valid = find(is_valid);
+                    is_valid(is_only_pr) = [];
+                    
+                    d_p = d_p(is_valid);
+                    d_ph = [d_ph d_p];
+                    rec_id = [rec_id r*ones(size(d_p))];
+                    
+                    go_id = [go_id g(is_valid)'];
+                    w = wl_obs{r};
+                    wl_id = [wl_id w(is_valid)'];
+                    e = el_obs{r};
+                    el = [el e(i,g(is_valid))];
+                    as = apr_std_obs{r};
+                    apr_std = [apr_std as(is_valid)'];
+                  
+                    is_ph = [is_ph ip(is_valid)'];
+                end
+                
+                [res, dt_rec, dt_sat, d_iono, rs_id] = Receiver_Work_Space.dtRobustAdjustement(d_ph, rec_id, go_id, wl_id, el, apr_std, is_ph);
+                u_r = unique(rec_id);
+                ddt_rec(i+1,u_r) = dt_rec;
+                ddt_sat(i+1,unique(go_id)) = dt_sat;
+                for rr = 1 : n_rec
+                    idx_o = floor(rs_id/1000) == rr;
+                    dt_iono(i+1,rem(rs_id(idx_o),1000) ,rr) = d_iono(idx_o);
+                end
+                i
+            end
+            % fill holes smaller than ....
+            min_hole = state.getMinArc(rec_work_list(1).time.getRate);
+            sat_hole = false(size(ddt_sat));
+            for s = 1 : n_sat
+                idx = ddt_sat(:,s)==0;
+                idx_s = flagShrink(idx, ceil((min_hole - 1)/2));
+                idx_e = flagExpand(idx_s, ceil((min_hole - 1)/2));
+                arc_join = xor(idx,idx_e);
+                sat_hole(:,s) = arc_join;
+            end
+            rec_hole = false(size(ddt_rec));
+            for r = 1 : n_rec
+                idx = ddt_rec(:,r)==0;
+                idx_s = flagShrink(idx, ceil((min_hole - 1)/2));
+                idx_e = flagExpand(idx_s, ceil((min_hole - 1)/2));
+                arc_join = xor(idx,idx_e);
+                start_arc = find(diff(arc_join) ==1);
+                end_arc = find(diff(arc_join)  == -1);
+                end_arc(end_arc == 1) = [];
+                if length(start_arc) > length(end_arc)
+                    start_arc(end) = [];
+                end
+                for i = 1 : length(start_arc)
+                valid_rec = find(id_sync(start_arc(i),:) ~=0 & id_sync(end_arc(i),:) ~= 0);
+                
+                for r = valid_rec
+                    ob = obs{r};
+                    d_p = ob(end_arc(i),:) - ob(start_arc(i),:);
+                    g = go_id_obs{r};
+                    ip = is_ph_obs{r};
+                    
+                    is_valid = ~isnan(d_p)';
+                    [df ] = setdiff(unique(g(~ip & is_valid)),unique(g(ip & is_valid))); % remove code only observations
+                    [is_only_pr] = ismember(g(is_valid),df);
+                    is_valid = find(is_valid);
+                    is_valid(is_only_pr) = [];
+                    
+                    d_p = d_p(is_valid);
+                    d_ph = [d_ph d_p];
+                    rec_id = [rec_id r*ones(size(d_p))];
+                    
+                    go_id = [go_id g(is_valid)'];
+                    w = wl_obs{r};
+                    wl_id = [wl_id w(is_valid)'];
+                    e = el_obs{r};
+                    el = [el e(i,g(is_valid))];
+                    as = apr_std_obs{r};
+                    apr_std = [apr_std as(is_valid)'];
+                    
+                    is_ph = [is_ph ip(is_valid)'];
+                end
+                [res, dt_rec, dt_sat, d_iono, rs_id] = Receiver_Work_Space.dtRobustAdjustement(d_ph, rec_id, go_id, wl_id, el, apr_std, is_ph);
+                ddt_rec(start_arc(i)+1,r) = dt_rec(unique(rec_id) == r);
+                end
+            end
+            
+            for s = 1 : n_sat
+                idx = ddt_sat(:,s)==0;
+                idx_s = flagShrink(idx, ceil((min_hole - 1)/2));
+                idx_e = flagExpand(idx_s, ceil((min_hole - 1)/2));
+                arc_join = xor(idx,idx_e);
+                sat_hole(:,s) = arc_join;
+                start_arc = find(diff(arc_join) ==1);
+                end_arc = find(diff(arc_join)  == -1);
+                end_arc(end_arc == 1) = [];
+                if length(start_arc) > length(end_arc)
+                    start_arc(end) = [];
+                end
+                for i = 1 : length(start_arc)
+                    valid_rec = find(id_sync(start_arc(i),:) ~=0 & id_sync(end_arc(i),:) ~= 0);
+                    
+                    for r = valid_rec
+                        ob = obs{r};
+                        d_p = ob(end_arc(i),:) - ob(start_arc(i),:);
+                        g = go_id_obs{r};
+                        ip = is_ph_obs{r};
+                        
+                        is_valid = ~isnan(d_p)';
+                        [df ] = setdiff(unique(g(~ip & is_valid)),unique(g(ip & is_valid))); % remove code only observations
+                        [is_only_pr] = ismember(g(is_valid),df);
+                        is_valid = find(is_valid);
+                        is_valid(is_only_pr) = [];
+                        
+                        d_p = d_p(is_valid);
+                        d_ph = [d_ph d_p];
+                        rec_id = [rec_id r*ones(size(d_p))];
+                        
+                        go_id = [go_id g(is_valid)'];
+                        w = wl_obs{r};
+                        wl_id = [wl_id w(is_valid)'];
+                        e = el_obs{r};
+                        el = [el e(i,g(is_valid))];
+                        as = apr_std_obs{r};
+                        apr_std = [apr_std as(is_valid)'];
+                        
+                        is_ph = [is_ph ip(is_valid)'];
+                    end
+                    [res, dt_rec, dt_sat, d_iono, rs_id] = Receiver_Work_Space.dtRobustAdjustement(d_ph, rec_id, go_id, wl_id, el, apr_std, is_ph);
+                    ddt_sat(start_arc(i)+1,s) = dt_sat(unique(go_id) == s);
+                end
+            end
+            ddt_sat = cumsum(ddt_sat);
+            ddt_rec = cumsum(ddt_rec);
+            iono_const = 40.3*10^16;
+            
+            for r = 1 : n_rec
+                ob = obs{r};
+                go_id = go_id_obs{r};
+                iono = cumsum(dt_iono(:,:,r));
+                ip = is_ph_obs{r};
+                w = wl_obs{r};
+                sgn = ones(size(ip)).*iono_const.*(w/Core_Utils.V_LIGHT).^2;
+                sgn(ip) = -1*sgn(ip);
+                
+                ob = ob - ddt_sat(id_sync(:,r)~=0,go_id) - repmat(sgn',sum(id_sync(:,r)~=0),1).*iono(id_sync(:,r)~=0,go_id) - repmat(ddt_rec(id_sync(:,r)~=0,r),1,length(go_id));
+                ob = ob(:,ip);
+                for j = 1 : size(ob,2)
+                    idx = ob(:,j)==0;
+                    idx_s = flagShrink(idx, ceil((min_hole - 1)/2));
+                    idx_e = flagExpand(idx_s, ceil((min_hole - 1)/2));
+                    arc_join = xor(idx,idx_e);
+                    sat_hole(:,s) = arc_join;
+                    start_arc = find(diff(arc_join) ==1);
+                    end_arc = find(diff(arc_join)  == -1);
+                    end_arc(end_arc == 1) = [];
+                    if length(start_arc) > length(end_arc)
+                        start_arc(end) = [];
+                    end
+                    for k = 1 : length(start_arc)
+                        ob((start_arc(k)+1):(end_arc(k)-1),j) =  ob(start_arc(k),j);
+                    end
+                end
+                d_ob = [  diff(ob); 1e3*ones(1, size(ob,2));];
+                d_ob(isnan(ob)) = 1e3;
+                d_ob = [1e3*ones(1, size(ob,2));  d_ob;];
+                for i = 1 : size(ob,1) % actual outlier & cycle slips detection
+                    idx_ob = find(~isnan(ob(i,:)));
+                    [o_idx, cs_idx] = Receiver_Work_Space.outlierCyscleSlipDetect(d_ob(i:(i+1),idx_ob), w(idx_ob)', ol_thr, cs_thr);
+                    rec_work_list(r).sat.outliers_ph_by_ph(i,idx_ob) = o_idx;
+                    rec_work_list(r).sat.cycle_slip_ph_by_ph(i,idx_ob) = cs_idx;
+                end
+                rec_work_list(r).sat.outliers_ph_by_ph = sparse(rec_work_list(r).sat.outliers_ph_by_ph);
+                rec_work_list(r).sat.cycle_slip_ph_by_ph = sparse(rec_work_list(r).sat.cycle_slip_ph_by_ph);
+            end
+            
+            for r = 1 : n_rec
+                rec_work_list(r).remShortArc(state.getMinArc(rec_work_list(r).time.getRate));
+            end
+        end
+        function [res, dt_rec, dt_sat, d_iono, u_rs] = dtRobustAdjustement(d_ph, rec_id, go_id, wl_id, el, apr_std, is_ph)
+            
+            n_obs = length(d_ph);
+            u_r = unique(rec_id);
+            n_rec = length(u_r);
+            [~,rec_clk_id] = ismember(rec_id',u_r');
+            sat = numel(u_r) > 1;
+            u_s = unique(go_id);
+            n_sat = length(u_s);
+            rec = n_sat > 1;
+            if sat
+                [~,sat_clk_id] = ismember(go_id, u_s);
+                sat_clk_id = sat_clk_id' + length(u_r);
+            end
+            iono = true;
+            if iono
+                rs_id = round(rec_id*1000+go_id);
+                u_rs = unique(rs_id);
+                [~,iono_id] = ismember(rs_id, u_rs);
+                iono_id = iono_id' + max(sat_clk_id);
+            end
+            
+            iono_const = 40.3*10^16;
+            sign_iono = ones(size(is_ph'));
+            sign_iono(is_ph>0) = -1;
+            if rec
+                A = [ones(n_obs,1)];
+                A_idx = [rec_clk_id];
+            else
+                A = [];
+                A_idx = [];
+            end
+            if sat
+                A = [A ones(n_obs,1)];
+                A_idx = [A_idx  sat_clk_id];
+            end
+            if iono
+                A = [A sign_iono.*iono_const.*(wl_id'/Core_Utils.V_LIGHT).^2];
+                A_idx = [A_idx iono_id];
+            end
+            rows = repmat((1:n_obs)',1,size(A,2));
+            n_par = max(A_idx(:,end));
+            A = sparse(rows,A_idx,A,n_obs, n_par);
+            
+            vars_apr = apr_std'.^2 .* (sind(el')).^4;
+            % if sat && rec
+            %     A(:,n_rec+1) = [];
+            %     n_par = n_par -1;
+            % end
+            
+            W = sparse(diag(1./vars_apr));
+            N = A'*W*A ;
+            d_ph = d_ph';
+            B = A'*W*d_ph;
+            % G = [];
+            % if sat
+            %     G = [zeros(max(rec_clk_id),1) ; ones(max(sat_clk_id)-max(rec_clk_id),1)];
+            %     if iono
+            %         G = [G; zeros(length(u_rs),1)];
+            %     end
+            % end
+            % n_lagr = size(G,2);
+            % N = [[N G]; [G' zeros(n_lagr)]];
+            % B = [B;zeros(n_lagr,1)];
+            if iono
+                reg_d_iono = 1/(0.05^2);
+                n_iono = length(u_rs);
+                n_other = max(A_idx(:,end)) - n_iono;
+                R = sparse([[zeros(n_other) zeros(n_other, n_iono)]; [zeros(n_iono, n_other) reg_d_iono*eye(n_iono)]]);
+                N = N + R;%(1:(end-n_lagr),1:(end-n_lagr))
+            end
+            x = zeros(n_par,1);
+            dx = 9999*ones(999,1);
+            while max(abs(dx)) > 1e-3 %(1: (end-n_lagr))
+                dx = spinv(N,[],'qr') * B;
+                x = x +dx;%(1: (end-n_lagr))
+                res = d_ph - A*x;
+                res_n = res ./ sqrt(vars_apr);
+                res_n = res_n / mean(res_n);
+                rw =  ones(size(res_n));
+                rw(abs(res_n) > 2) =  2 ./ abs(res_n(abs(res_n) > 2));
+                RW = sparse(diag(1./vars_apr .*rw));
+                N =  A'*RW*A + R;
+                B = A'*RW*res;
+                %     N = [N G; G' zeros(n_lagr)];
+                %     B = [B;zeros(n_lagr,1)];
+            end
+            dt_rec = x(1:n_rec);
+            dt_sat = x((n_rec+1):(n_rec+n_sat));
+            d_iono = x((n_rec+n_sat+1):end);
         end
     end
 end

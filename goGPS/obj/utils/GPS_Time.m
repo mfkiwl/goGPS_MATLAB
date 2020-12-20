@@ -26,7 +26,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
@@ -1196,7 +1196,7 @@ classdef GPS_Time < Exportable & handle
             % get Reference Time, precision up to the ps precision
             %
             % SYNTAX
-            %   [gps_week, gps_sow, gps_dow] = this. getGpsWeek()
+            %   [gps_week, gps_sow, gps_dow] = this.getGpsWeek()
             if this.isUTC
                 gps_time = this.getCopy();
                 gps_time.toGps();
@@ -1309,7 +1309,7 @@ classdef GPS_Time < Exportable & handle
             % get Reference Time, precision up to the ps precision
             %
             % SYNTAX
-            %   [year, doy] = getDOY(this)
+            %   [year, doy, sod] = getDOY(this)
             if this.isUTC
                 time = this.getCopy();
                 time.toGps();
@@ -1322,7 +1322,7 @@ classdef GPS_Time < Exportable & handle
             % deal with loss of presition (keep 9 decimal digits)
             time = round((mat_time - datenummx(year,1,1))* 1e9) / 1e9;
             doy = floor(time) + 1; % days from the beginning of the year
-            sod = floor((time - doy +1) * 86400); % days from the beginning of the year
+            sod = ((time - doy +1) * 86400); % seconds from the beginning of the year
         end
         
         function [year, month, day, hour, minute, second] = getCalEpoch(this, idx)
@@ -1426,7 +1426,7 @@ classdef GPS_Time < Exportable & handle
             yy(year>= 2000) = year(year>= 2000) - 2000;
             yy(year< 2000)  = year(year< 2000)  - 1900;
             n_ep = length(year);
-            sinex_str = reshape(sprintf('%2d:%03d:%05d',[yy,doy,sod]'),12,n_ep)';
+            sinex_str = reshape(sprintf('%2d:%03d:%05d',[yy,doy,round(sod)]'),12,n_ep)';
         end
         
         function date_string = toStringGpsWeek(this)
@@ -1893,6 +1893,37 @@ classdef GPS_Time < Exportable & handle
             this = GPS_Time(mat_time, true);
         end
         
+        function str = toInfo(time)
+            % Show all the time info of the first epoch of time
+            %
+            % INPUT
+            %   time    time can be a GPS_Time or a string or a matlab time
+            %           < default value = now >
+            %
+            % SYNTAX
+            %   str = GPS_Time.toInfo(<time>)
+            %
+            % EXAMPLE 
+            %   str = GPS_Time.toInfo('2020/01/01 00:00');
+            %   str = GPS_Time.toInfo(); 
+            
+            if nargin == 0
+                time = GPS_Time.now;
+            end
+            if ~isa(time, 'GPS_Time')
+                time = GPS_Time(time);
+            end                
+            time = time.first; 
+            str = time.toString;
+            [year, doy, sod] = time.getDOY;
+            [gps_week, gps_sow, gps_dow] = time.getGpsWeek();
+            
+            str = sprintf('-----------------------\n GPS Time:\n %s\n %s\n\n YEAR DOY SOD\n %4d %3d %6.3f\n\n WEEK DOW SOW\n %4d %03d %6.3f\n-----------------------\n', ...
+                str(1:10), str(12:end), ...
+                year, doy, sod, ...
+                gps_week, gps_dow, gps_sow);
+       end
+            
         function time_zone = getLocalTimeOffset()
             % get local time zone offset (in hours)
             %
@@ -1958,6 +1989,9 @@ classdef GPS_Time < Exportable & handle
             %
             % SYNTAX
             %   this = GPS_Time.fromDoySod(year, doy, sod)
+            if nargin == 2
+                sod = 0;
+            end
             unix_s = uint32((datenummx(year , 1, doy)  - datenummx(1970,1,1))*86400) + uint32(floor(sod));
             unix_s_f = sod - floor(sod);
             this = GPS_Time(unix_s, unix_s_f);

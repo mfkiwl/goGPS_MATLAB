@@ -14,7 +14,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
@@ -401,11 +401,11 @@ classdef Constellation_Collector < Settings_Interface
             sys = this.system(goid);
             switch sys
                 case 'G'
-                    ref_dcb = ['C1WC2W';]; %b
+                    ref_dcb = 'C1WC2W'; % b
                 case 'R'
                     ref_dcb = 'C1PC2P';
                 case 'E'
-                    ref_dcb = ['C1CC5Q';];
+                    ref_dcb = 'C1CC5Q';
                 case 'C'
                     ref_dcb = 'C2IC7I';
                 case 'J'
@@ -862,7 +862,7 @@ classdef Constellation_Collector < Settings_Interface
             if nargin == 2
                 sat_name = sys;
                 sys = sat_name(:,1);
-                prn = str2num(sat_name(:,2:end)'); %#ok<ST2NM>
+                prn = str2num(sat_name(:,2:end)); %#ok<ST2NM>
             end
             
             index = zeros(size(prn));

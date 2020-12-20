@@ -14,7 +14,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
@@ -176,6 +176,7 @@ classdef File_Rinex < Exportable
             this.first_epoch = GPS_Time();
             this.last_epoch = GPS_Time();
             this.coo = Coordinates;           % receiver coordinates
+            log = Core.getLogger;
             % for each file present in the list
             for f = 1 : numel(this.file_name_list)
                 marker_name = '';
@@ -187,12 +188,12 @@ classdef File_Rinex < Exportable
                     this.is_valid_list(f) = true;
                     fid = fopen(full_path, 'rt');
                     if fid < 0
-                        this.log.addError(['"' this.file_name_list{f} this.ext{f} '" appears to be missing'], this.verbosity_lev);
+                        log.addError(['"' this.file_name_list{f} this.ext{f} '" appears to be missing'], this.verbosity_lev);
                         this.is_valid_list(f) = false;
                     else
                         buf = fread(fid, 1e4, '*char')';
                         if length(buf) > 65 && strcmp(buf(61:64), 'CRIN')
-                            this.log.addError(sprintf('Check the following file, it seems to be hatanaka compressed\nDecompress "%s"', full_path));
+                            log.addError(sprintf('Check the following file, it seems to be hatanaka compressed\nDecompress "%s"', full_path));
                             this.is_valid_list(f) = false;
                             fclose(fid);
                         else
@@ -364,15 +365,15 @@ classdef File_Rinex < Exportable
                                     error(sprintf('"%s" seems corrupted', full_path));
                                 end
                             end
-                            this.log.addStatusOk(['"' this.file_name_list{f} this.ext{f} '" appears to be a valid RINEX'], this.verbosity_lev);
-                            this.log.addMessage(sprintf('        first epoch found at: %s', this.first_epoch.last.toString()), this.verbosity_lev);
+                            log.addStatusOk(['"' this.file_name_list{f} this.ext{f} '" appears to be a valid RINEX'], this.verbosity_lev);
+                            log.addMessage(sprintf('        first epoch found at: %s', this.first_epoch.last.toString()), this.verbosity_lev);
                             
                             if ~isempty(date_stop)
                                 this.last_epoch.addEpoch(date_stop, [], true);
-                                this.log.addMessage(sprintf('        last  epoch found at: %s', this.last_epoch.last.toString()), this.verbosity_lev);
+                                log.addMessage(sprintf('        last  epoch found at: %s', this.last_epoch.last.toString()), this.verbosity_lev);
                             else
                                 if flag_header_only
-                                    this.log.addWarning('Last epoch not found in header, search in file is not enabled\nThe last epoch has not been saved within the object', this.verbosity_lev);
+                                    log.addWarning('Last epoch not found in header, search in file is not enabled\nThe last epoch has not been saved within the object', this.verbosity_lev);
                                     if ~isempty(this.first_epoch.last.getMatlabTime)
                                         this.last_epoch.addEpoch(this.first_epoch.last.getMatlabTime, [], true);
                                     end
@@ -427,16 +428,16 @@ classdef File_Rinex < Exportable
                                         end
                                     end
                                     if file_ko
-                                        this.log.addError(sprintf('Check the following file, it seems to be corrupted\nPath: "%s"', full_path));
+                                        log.addError(sprintf('Check the following file, it seems to be corrupted\nPath: "%s"', full_path));
                                         this.first_epoch = this.first_epoch.getEpoch(1 : this.last_epoch.length);
                                         this.is_valid_list(f) = false;                                        
                                     elseif isempty(time)
-                                        this.log.addError(sprintf('Check the following file, it seems to be empty\nPath: "%s"', full_path));
+                                        log.addError(sprintf('Check the following file, it seems to be empty\nPath: "%s"', full_path));
                                         this.first_epoch = this.first_epoch.getEpoch(1 : this.last_epoch.length);
                                         this.is_valid_list(f) = false;
                                     else
                                         this.last_epoch.append(time);
-                                        this.log.addMessage(sprintf('        last  epoch found at: %s', this.last_epoch.last.toString()), this.verbosity_lev);
+                                        log.addMessage(sprintf('        last  epoch found at: %s', this.last_epoch.last.toString()), this.verbosity_lev);
                                     end
                                 end
                             end
@@ -454,7 +455,7 @@ classdef File_Rinex < Exportable
                         end
                     end
                 catch ex
-                    this.log.addWarning(['"' this.file_name_list{f} this.ext{f} '" appears to be a corrupted RINEX file or missing'], this.verbosity_lev);
+                    log.addWarning(['"' this.file_name_list{f} this.ext{f} '" appears to be a corrupted RINEX file or missing'], this.verbosity_lev);
                     %Core_Utils.printEx(ex);
                     this.is_valid_list(f) = false;
                     fclose(fid);
@@ -468,7 +469,7 @@ classdef File_Rinex < Exportable
             end
             this.is_valid = all(this.is_valid_list);
             if (~this.is_valid)
-                this.log.addWarning('Some or all the RINEX files are corrupted or missing!!!', this.verbosity_lev);
+                log.addWarning('Some or all the RINEX files are corrupted or missing!!!', this.verbosity_lev);
             end
         end
 
@@ -746,7 +747,7 @@ classdef File_Rinex < Exportable
                 if (nargin == 1)
                     validity = validity || any([this(r).is_valid_list]);
                 else
-                    if file_number < numel(this(r).is_valid_list)
+                    if file_number <= numel(this(r).is_valid_list)
                         validity = validity || this(r).is_valid_list(file_number);
                     end
                 end

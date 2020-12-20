@@ -13,7 +13,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
@@ -125,7 +125,8 @@ classdef Tropo_Sinex_Compare < handle
                         [out_dir, file_name, file_ext] = fileparts(file_path);
                         if ~ismember([file_name, file_ext], {file_list.name})
                             i = i + 1;
-                            file_name_lst(i) = {fnp.dateKeyRep(sprintf('ftp://cddis.nasa.gov/pub/gps/products/troposphere/zpd/${YYYY}/${DOY}/%s${DOY}0.${YY}zpd', lower(sta_name{s})), c_time)};
+                            %file_name_lst(i) = {fnp.dateKeyRep(sprintf('ftp://cddis.nasa.gov/pub/gps/products/troposphere/zpd/${YYYY}/${DOY}/%s${DOY}0.${YY}zpd', lower(sta_name{s})), c_time)};
+                            file_name_lst(i) = {fnp.dateKeyRep(sprintf('ftp://igs.ensg.ign.fr/pub/igs/products/troposphere/${YYYY}/${DOY}/%s${DOY}0.${YY}zpd', lower(sta_name{s})), c_time)};
                             f_ext_lst(i) = {'.gz'};
                             f_status_lst(i) = false;
                         end
@@ -176,8 +177,8 @@ classdef Tropo_Sinex_Compare < handle
                     file_name = fnp.dateKeyRep(sprintf('%s/station/IGS_solutions/TROPO/${YYYY}/${DOY}/%s${DOY}0.${YY}zpd', data_dir, lower(sta_name{s})), c_time);
                     % Use ftp if and only if aria is not working
                     if ~flag_aria && exist(file_name, 'file') ~= 2
-                        remote_file_name = fnp.dateKeyRep(sprintf('pub/gps/products/troposphere/zpd/${YYYY}/${DOY}/%s${DOY}0.${YY}zpd.gz',lower(sta_name{s})), c_time);
-                        ftp_dw = FTP_Downloader('cddis.nasa.gov', 21);
+                        remote_file_name = fnp.dateKeyRep(sprintf('/pub/igs/products/troposphere/${YYYY}/${DOY}/%s${DOY}0.${YY}zpd.gz',lower(sta_name{s})), c_time);
+                        ftp_dw = FTP_Downloader('igs.ensg.ign.fr', 21);
                         [pathstr, name, ext] = fileparts(file_name);
                         ftp_dw.downloadUncompress(remote_file_name, pathstr);
                     end
@@ -755,7 +756,7 @@ classdef Tropo_Sinex_Compare < handle
             n_rec = length(stas);
             h = nan(n_rec,1);
             for i = 1 : n_rec
-                [lat,lon,h(i)] = Coordinates.cart2geod(this.results.r2.(stas{i}).xyz(1,:));
+                [lat, lon, h(i)] = Coordinates.cart2geod(this.results.r2.(stas{i}).xyz(1,:));
                 h(i) = h(i) - Coordinates.getOrthometricCorrFromLatLon(lat, lon);
             end
         end

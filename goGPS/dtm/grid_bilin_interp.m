@@ -26,11 +26,11 @@ function [interp_value] = grid_bilin_interp(X_approx, Y_approx, grid, ncols, nro
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
-%  Written by:
+%  Written by:       Mirko Reguzzoni
 %  Contributors:     ...
 %  A list of all the historical goGPS contributors is in CREDITS.nfo
 %--------------------------------------------------------------------------

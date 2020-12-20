@@ -15,7 +15,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2020 Andrea Gatti, Giulio Tagliaferro
@@ -54,6 +54,7 @@ classdef Logger < handle
         STD_GUI        = 4;     % Output: GUI only    100 (third bit set)
         
         ORANGE = [1 0.65 0];
+        ERROR_ON_CONSOLE = true;
     end
 
     properties (GetAccess = 'private', SetAccess = 'protected')
@@ -90,7 +91,7 @@ classdef Logger < handle
     end
 
     methods (Static)
-        function this = getInstance(std_out)                        
+        function this = getInstance(std_out)
             % Concrete implementation.  See Singleton superclass.
             persistent unique_instance_logger__
             if isempty(unique_instance_logger__)
@@ -216,30 +217,34 @@ classdef Logger < handle
             %   this.setOutMode(<screen_out>, <file_out>, <gui_out>)
             %
             
-            if ~isempty(screen_out)
-                % set first bit
-                if screen_out
-                    this.std_out = bitor(this.std_out, 1, 'uint8');
-                else
-                    this.std_out = bitand(this.std_out, 6, 'uint8');
+            if nargin == 2 && isnumeric(screen_out)
+                this.std_out = screen_out;
+            else
+                if ~isempty(screen_out)
+                    % set first bit
+                    if screen_out
+                        this.std_out = bitor(this.std_out, 1, 'uint8');
+                    else
+                        this.std_out = bitand(this.std_out, 6, 'uint8');
+                    end
                 end
-            end
-            
-            if (nargin > 2) && ~isempty(file_out)
-                % set second bit
-                if file_out
-                    this.std_out = bitor(this.std_out, 2, 'uint8');
-                else
-                    this.std_out = bitand(this.std_out, 5, 'uint8');
+                
+                if (nargin > 2) && ~isempty(file_out)
+                    % set second bit
+                    if file_out
+                        this.std_out = bitor(this.std_out, 2, 'uint8');
+                    else
+                        this.std_out = bitand(this.std_out, 5, 'uint8');
+                    end
                 end
-            end
-            
-            if (nargin > 3) && ~isempty(gui_out)
-                % set third bit
-                if gui_out
-                    this.std_out = bitor(this.std_out, 4, 'uint8');
-                else
-                    this.std_out = bitand(this.std_out, 3, 'uint8');
+                
+                if (nargin > 3) && ~isempty(gui_out)
+                    % set third bit
+                    if gui_out
+                        this.std_out = bitor(this.std_out, 4, 'uint8');
+                    else
+                        this.std_out = bitand(this.std_out, 3, 'uint8');
+                    end
                 end
             end
         end
@@ -786,7 +791,7 @@ classdef Logger < handle
             text = strrep(text, '\n', char([10, 32 * ones(1,15)]));
             text = strrep(text, '\', '\\');
             
-            if this.isScreenOut % Screen
+            if this.isScreenOut || this.ERROR_ON_CONSOLE % Screen
                 if (color_mode)
                     cprintf('err', 'Error: ');
                     cprintf('text', [text '\n']);
@@ -843,7 +848,7 @@ classdef Logger < handle
                 n_spaces = 7;
             end
             str = strrep([char(ones(1,n_spaces) * 32) str], char(10), char([10 ones(1, n_spaces) * 32]));
-        end
+        end        
     end
 
 end

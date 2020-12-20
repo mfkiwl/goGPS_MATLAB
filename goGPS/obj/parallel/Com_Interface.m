@@ -21,7 +21,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2009-2019 Mirko Reguzzoni, Eugenio Realini
@@ -178,7 +178,9 @@ classdef Com_Interface < handle
                     msg_type = [msg_type this.id];
                 end
                 msg_type = strrep(msg_type, '**', '*');
+                warning off; % I don't care if the file does not exist
                 delete(fullfile(this.getComDir, this.working_dir, msg_type));
+                warning on;
             end            
         end
 

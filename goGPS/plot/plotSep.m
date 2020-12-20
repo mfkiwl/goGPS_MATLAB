@@ -46,51 +46,53 @@
 %--------------------------------------------------------------------------
         
 function lh = plotSep(t, data, varargin)
-    if isa(t, 'handle')
-        ax = t;
-        t = data;
-        data = varargin{1};
-        varargin = varargin{2:end};
-    else
-        ax = gca;
-    end
-    try
-        if numel(t) ~= numel(data) && numel(t) ~= size(data, 1)
-            % this means that there is only one data parameter and no time
-            varargin = [{data} varargin];
+    if not(isempty(data))
+        if isa(t, 'handle')
+            ax = t;
+            t = data;
+            data = varargin{1};
+            varargin = varargin{2:end};
+        else
+            ax = gca;
+        end
+        try
+            if numel(t) ~= numel(data) && numel(t) ~= size(data, 1)
+                % this means that there is only one data parameter and no time
+                varargin = [{data} varargin];
+                data = t;
+                if size(data, 1) == 1
+                    % I want the data to be columnwise
+                    data = data';
+                end
+                t = 1 : size(data, 1);
+            else
+                if size(data, 1) == 1
+                    % I want the data to be columnwise
+                    data = data';
+                end
+            end
+        catch
+            % probably data is undefined
             data = t;
             if size(data, 1) == 1
                 % I want the data to be columnwise
                 data = data';
             end
-            t = 1 : size(data, 1);
-        else
-            if size(data, 1) == 1
-                % I want the data to be columnwise
-                data = data';
+            t = (1 : size(data, 1))';
+        end
+        for c = 1 : size(data, 2)
+            if numel(data) == numel(t)
+                [t_col, data_col] = insertNan4Plots(t(:,c), data(:,c));
+            else
+                [t_col, data_col] = insertNan4Plots(t, data(:,c));
             end
+            if isempty(varargin)
+                lh = plot(ax, t_col, data_col);
+            else
+                lh = plot(ax, t_col, data_col, varargin{:});
+            end
+            hold on;
         end
-    catch
-        % probably data is undefined
-        data = t;
-        if size(data, 1) == 1
-            % I want the data to be columnwise
-            data = data';
-        end
-        t = (1 : size(data, 1))';
-    end
-    for c = 1 : size(data, 2)
-        if numel(data) == numel(t)
-            [t_col, data_col] = insertNan4Plots(t(:,c), data(:,c));
-        else
-            [t_col, data_col] = insertNan4Plots(t, data(:,c));
-        end
-        if isempty(varargin)
-            lh = plot(ax, t_col, data_col);
-        else
-            lh = plot(ax, t_col, data_col, varargin{:});
-        end
-        hold on;
     end
 end
 

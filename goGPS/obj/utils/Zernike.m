@@ -16,7 +16,7 @@
 %     __ _ ___ / __| _ | __|
 %    / _` / _ \ (_ |  _|__ \
 %    \__, \___/\___|_| |___/
-%    |___/                    v 1.0b7
+%    |___/                    v 1.0b8
 %
 %--------------------------------------------------------------------------
 %  Copyright (C) 2020 Andrea Gatti, Giulio Tagliaferro, Eugenio Realini
@@ -323,7 +323,7 @@ classdef Zernike < handle
             % SINTAX
             %   [z_par, l, m, A] = analysisAll(l_max, m_max, az, el, data, <max_reg = 1>)
             
-            id_ok = ~isnan(data(:));
+            id_ok = ~isnan(data(:)) & ~isnan(az) & ~isnan(r);
             [A, l, m] = Zernike.getAll(l_max, m_max, az(id_ok), r(id_ok));
             if nargin == 6 && ~isempty(max_reg) && max_reg
                 reg_fun = 2 * ((1./(1 + exp(-l))) - 0.5) * max_reg;
