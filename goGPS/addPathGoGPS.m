@@ -79,6 +79,9 @@ function addPathGoGPS(flag_rem)
         % SVN folders
         [l1, l2] = regexp(p,'(?<=:)[^:]*\.svn[^:]*:');
 
+        % LOG folders
+        [l1, l2] = regexp(p,'(?<=:)[^:]*\log[^:]*:');
+        
         for l = size(l1, 2) : -1 : 1
             p(l1(l) : l2(l)) = [];
         end

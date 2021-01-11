@@ -338,7 +338,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
         FPARAM_COO_PPP = LS_Parametrization.ALL_FREQ; % frequenccy parametrization of coordinates ppp
         FPARAM_COO_NET = LS_Parametrization.ALL_FREQ;  % frequenccy parametrization of coordinates net
         
-        RATE_COO_PPP = 0; % time rate coordinates ppp
+        RATE_COO_PPP = 0;  % time rate coordinates ppp
         RATE_COO_NET = 0;  % time rate coordinates net
         
         AREG_COO_PPP  = [-1 -1];  % horizantial absolute regularization coordinates ppp
@@ -704,7 +704,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
         
         sss_file_based = Prj_Settings.SSS_FILE_BASED;
         sss_duration   = Prj_Settings.SSS_DURATION;
-        sss_buffer    = Prj_Settings.SSS_BUFFER;
+        sss_buffer     = Prj_Settings.SSS_BUFFER;
         
         flag_smooth_tropo_out = Prj_Settings.FLAG_SMOOTH_TROPO_OUT;
         flag_separate_coo_at_boundary = Prj_Settings.FLAG_SEPARATE_COO_AT_BOUNDARY;
@@ -1208,7 +1208,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
                 
                 this.sss_file_based = state.getData('sss_file_based');
                 this.sss_duration   = state.getData('sss_duration');
-                this.sss_buffer    = state.getData('sss_buffer');
+                this.sss_buffer     = state.getData('sss_buffer');
 
                 this.flag_smooth_tropo_out  = state.getData('flag_smooth_tropo_out');
                 this.flag_separate_coo_at_boundary = state.getData('flag_separate_coo_at_boundary');
@@ -1600,7 +1600,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
                 
                 this.sss_file_based = state.sss_file_based;
                 this.sss_duration   = state.sss_duration;
-                this.sss_buffer    = state.sss_buffer;
+                this.sss_buffer     = state.sss_buffer;
 
                 this.flag_smooth_tropo_out = state.flag_smooth_tropo_out;
                 this.flag_separate_coo_at_boundary = state.flag_separate_coo_at_boundary;
@@ -1881,12 +1881,12 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             this.eph_full_name = '';
             this.clk_full_name = '';
             this.erp_full_name = '';
-            this.updateObsFileName();
 
             % Call to Super Methods
             this.import@Command_Settings(state);
 
             this.postImportInit();
+            this.updateObsFileName();
         end
 
         function str = toString(this, str)
@@ -4078,7 +4078,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
     % =========================================================================
     %%  GETTERS IO
     % =========================================================================
-    methods       
+    methods
         function cur_ini = getIniPath(this)
             % Get the path of the current ini
             %
@@ -4207,12 +4207,14 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             %   flag = this.getPreferredIono()
             flag = false(5, 1);
             for i = 1 : numel(this.preferred_iono)
-                switch this.preferred_iono{i}
-                    case 'final', flag(1) = true;
-                    case 'rapid', flag(2) = true;
-                    case 'predicted1', flag(3) = true;
-                    case 'predicted2', flag(4) = true;
-                    case 'broadcast', flag(5) = true;
+                if not(isempty(this.preferred_iono{i}))
+                    switch this.preferred_iono{i}
+                        case 'final', flag(1) = true;
+                        case 'rapid', flag(2) = true;
+                        case 'predicted1', flag(3) = true;
+                        case 'predicted2', flag(4) = true;
+                        case 'broadcast', flag(5) = true;
+                    end
                 end
             end
         end
@@ -5188,7 +5190,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
     % =========================================================================
     %%  SETTERS IO
     % =========================================================================
-    methods        
+    methods
         function setFile(this, filename, resouce_name)
             % set file
             %
@@ -5726,6 +5728,24 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
             name = this.prj_name;
         end
 
+        function rate = getRateNet(this)
+            % get the rate of the coordinates in network
+            %
+            % SYNTAX
+            %   rate = this.getRateNet()
+            
+            rate = this.rate_coo_net;
+        end
+        
+        function rate = getRatePPP(this)
+            % get the rate of the coordinates in PPP
+            %
+            % SYNTAX
+            %   rate = this.getRatePPP()
+            
+            rate = this.rate_coo_ppp;
+        end
+        
         function file_path = getFilePath(this, file_path)
             % Get the file name of the current settings
             %   
@@ -6290,7 +6310,7 @@ classdef Prj_Settings < Settings_Interface & Command_Settings
     
     %%  SETTERS
     % =========================================================================
-    methods   
+    methods
         function err_code = set(this, par_name, new_value)
             % Generic set function to change a parameter of state
             % Used mainly by the command SET

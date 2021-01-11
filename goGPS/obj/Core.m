@@ -84,6 +84,7 @@ classdef Core < handle
         sky         % Core_Sky handler
         atx         % antenna manager (stores all the antennas available)
         atmo        % Atmosphere handler
+        encyclopedia % Collection of definitions
         mn          % Meteorological Network handler
         rf          % Reference Frame handler
         cmd         % Command_Interpreter handler
@@ -400,6 +401,20 @@ classdef Core < handle
             if isempty(atmo)
                 atmo = Atmosphere();
                 core.atmo = atmo;
+            end            
+        end
+        
+        function ency = getEncyclopedia()
+            % Return the pointer to the Encylcopedia Object
+            %
+            % SYNTAX
+            %   atmo = Core.getAtmosphere()
+            
+            core = Core.getInstance(false, true);
+            ency = core.encyclopedia;
+            if isempty(ency)
+                ency = Encyclopedia();
+                core.encyclopedia = ency;
             end            
         end
         
@@ -800,7 +815,12 @@ classdef Core < handle
                 end
             end
             if ~(exist(this.local_storage, 'dir'))
-                mkdir(this.local_storage)
+                try
+                    mkdir(this.local_storage);
+                catch ex
+                    Core_Utils.printEx(ex);
+                    Logger.getInstance.addError(sprintf('Creating "%s" seems impossible, check your permissions!', this.local_storage));
+                end
             end            
         end
 

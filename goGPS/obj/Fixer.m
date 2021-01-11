@@ -145,7 +145,14 @@ classdef Fixer < handle
                     is_fixed = true;
                     l_fixed   = amb_ok;
                 case {'lambda_partial'}
-                    [tmp_amb_fixed, sq_norm, success_rate,~,~,nfx,mu] = LAMBDA(amb_float(amb_ok), full(C_amb_amb(amb_ok, amb_ok)), 5, 'P0', 0.995, 'mu', this.mu);
+                    Qahat = full(C_amb_amb(amb_ok, amb_ok));
+                    % Trick lambda code, with partials noi siamo più di bocca buona...
+                    % if it is almost square make it square
+                    if all(serialize(Qahat-Qahat' < 1e-6)) && ~all(serialize(Qahat-Qahat' < 1e-8))
+                        Qahat = (Qahat + Qahat') ./ 2;
+                    end
+                    
+                    [tmp_amb_fixed, sq_norm, success_rate,~,~,nfx,mu] = LAMBDA(amb_float(amb_ok), Qahat, 5, 'P0', 0.995, 'mu', this.mu);
                     is_fixed = true;
                     l_fixed   = amb_ok;
                     l_fixed(l_fixed) = abs(fracFNI(tmp_amb_fixed(:,1))) < 1e-9;
@@ -203,14 +210,27 @@ classdef Fixer < handle
                 amb_fixed = nan(size(amb_float));
                 l_fixed = nan(size(amb_float));
                 u_rec = unique(rec_id);
-                 
+                
+                flag_ko = false;
                 for r = u_rec'
                     rec_idx = rec_id == r;
-                     [amb_fixed(rec_idx), is_fixed, l_fixed(rec_idx)] = this.fixAmbiguities(amb_float(rec_idx), C_amb_amb(rec_idx,rec_idx), approach);
+                    try
+                        [amb_fixed(rec_idx), is_fixed, l_fixed(rec_idx)] = this.fixAmbiguities(amb_float(rec_idx), C_amb_amb(rec_idx,rec_idx), approach);
+                    catch ex
+                        Core_Utils.printEx(ex);
+                        flag_ko = true;
+                    end
                 end
-                is_fixed = true;
+                is_fixed = not(flag_ko);
             else
-                [amb_fixed, is_fixed, l_fixed] = this.fixAmbiguities(amb_float, C_amb_amb, approach);
+                try
+                    [amb_fixed, is_fixed, l_fixed] = this.fixAmbiguities(amb_float, C_amb_amb, approach);
+                catch ex
+                    Core_Utils.printEx(ex);
+                    amb_fixed = nan(size(amb_float));
+                    l_fixed = nan(size(amb_float));
+                    is_fixed = false;
+                end
             end
         end
         

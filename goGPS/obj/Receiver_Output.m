@@ -560,7 +560,7 @@ classdef Receiver_Output < Receiver_Commons
                 log.addError('Pre-processing sigma0 is above 5m, this means that it probably failed, not importing results as output');
                 flag_ok = false;
             end
-            if flag_ok && ~isempty(rec_work.quality_info.s0) && ~isnan(rec_work.quality_info.s0) && rec_work.quality_info.s0 > 0.05
+            if flag_ok && ~isempty(rec_work.quality_info.s0) && ~isnan(rec_work.quality_info.s0) && rec_work.quality_info.s0 > 0.25
                 log.addError('Processing sigma0 is above 5cm, this means that it probably failed, not importing results as output');
                 flag_ok = false;
             end
@@ -860,6 +860,13 @@ classdef Receiver_Output < Receiver_Commons
                                 end
                             end
                         end
+                    end
+                    
+                    % insert coo computed using new
+                    if isempty(this.coo)
+                        this.coo = rec_work.getPos;
+                    else
+                        this.coo.append(rec_work.getPos);
                     end
                     log.addMarkedMessage(sprintf('Computed results for receiver "%s" have been imported into out object', this.parent.getMarkerName4Ch()));
                 else

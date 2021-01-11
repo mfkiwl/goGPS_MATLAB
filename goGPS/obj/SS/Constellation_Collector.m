@@ -947,6 +947,7 @@ classdef Constellation_Collector < Settings_Interface
             % SYNTAX
             %   code = obsCode2num(obs_code, prn);
             
+            obs_code(obs_code == '_') = ' ';
             ss_type = 'GREJCIS';
             comb_type = char([uint32('0'):uint32('9') uint32('A'):uint32('Z')]);
             obs_type = 'LCDS';
@@ -961,17 +962,21 @@ classdef Constellation_Collector < Settings_Interface
                 obs_code = [obs_code char(32 * ones(size(obs_code,1), 1, 'uint32'))];
             end
             for i = 1 : size(obs_code, 1)
-                num = uint64(find(ss_type == obs_code(i,1)) - 1);                     % sys
+                tmp_code = obs_code(i,:);
+                if (size(tmp_code,2) > 4) && all(tmp_code(4:end)== ' ')
+                    tmp_code = tmp_code(1:4);
+                end
+                num = uint64(find(ss_type == tmp_code(1)) - 1);                     % sys
                 num = num + prn(i) * field_dim(1);                                    % prn
-                tmp = uint64(find(comb_type == obs_code(i,end)) - 1) * field_dim(2);
+                tmp = uint64(find(comb_type == tmp_code(end)) - 1) * field_dim(2);
                 num = num + iif(isempty(tmp), 0, tmp);                                % combination
-                for c = 2 : (size(obs_code, 2) - 1)
+                for c = 2 : (size(tmp_code, 2) - 1)
                     if mod(c,3) == 2 % type
-                        tmp = uint64(find(obs_type == obs_code(i, c)) - 1) * field_dim(c+1);
+                        tmp = uint64(find(obs_type == tmp_code( c)) - 1) * field_dim(c+1);
                     elseif mod(c,3) == 0 % freq
-                        tmp = uint64(find(freq_type == obs_code(i, c)) - 1) * field_dim(c+1);
+                        tmp = uint64(find(freq_type == tmp_code( c)) - 1) * field_dim(c+1);
                     else % tracking
-                        tmp = uint64(find(trk_type == obs_code(i, c)) - 1) * field_dim(c+1);
+                        tmp = uint64(find(trk_type == tmp_code( c)) - 1) * field_dim(c+1);
                     end
                     num = num + iif(isempty(tmp), 0, tmp);
                 end
@@ -1074,8 +1079,14 @@ classdef Constellation_Collector < Settings_Interface
                 band = 'LEX6';
             elseif strcmp(ocode,'CL2')
                 band = 'B1';
+            elseif strcmp(ocode,'CL1')
+                band = 'B1C';
+            elseif strcmp(ocode,'CL5')
+                band = 'B2a';
             elseif strcmp(ocode,'CL7')
-                band = 'B2';
+                band = 'B2b';
+            elseif strcmp(ocode,'CL8')
+                band = 'B2ab';
             elseif strcmp(ocode,'CL6')
                 band = 'B3';
             elseif strcmp(ocode,'IL5')

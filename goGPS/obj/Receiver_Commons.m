@@ -77,6 +77,7 @@ classdef Receiver_Commons <  matlab.mixin.Copyable
         h_ortho        % orthometric height
         
         add_coo
+        coo
         %         = struct( ...
         %             'coo',  [], ...    % additional estimated coo
         %             'time', [], ...    % time of the coo
@@ -270,7 +271,7 @@ classdef Receiver_Commons <  matlab.mixin.Copyable
                 flag_add_coo = 0;
             end
             
-            if flag_add_coo == 0
+            if flag_add_coo == -100
                 if ~isempty(this.xyz)
                     coo = Coordinates.fromXYZ(this.xyz);
                 elseif ~isempty(this.parent.work.xyz)
@@ -283,6 +284,12 @@ classdef Receiver_Commons <  matlab.mixin.Copyable
                     if not(isempty(tmp))
                         coo.setTime(tmp);
                     end
+                end
+            elseif flag_add_coo == 0
+                coo = this.coo;
+                % Fallback (in case of empty coo)
+                if isempty(coo)
+                    coo = this.getPos(-100);
                 end
             else
                 if ~isempty(this.add_coo)
@@ -301,6 +308,7 @@ classdef Receiver_Commons <  matlab.mixin.Copyable
                     end
                 end
             end
+            coo.setName(this.parent.getMarkerName4Ch)
                         
         end
         
@@ -609,7 +617,7 @@ classdef Receiver_Commons <  matlab.mixin.Copyable
             elseif this.state.mapping_function == 2
                 [mfh, mfw] = atmo.vmf_grd(time, this.lat./180*pi, this.lon./180*pi, el./180*pi, this.h_ellips);
             elseif this.state.mapping_function == 1
-                [mfh, mfw] = atmo.gmf(ttime, thsi.lat./180*pi, this.lon./180*pi, this.h_ortho, el./180*pi);
+                [mfh, mfw] = atmo.gmf(time, this.lat./180*pi, this.lon./180*pi, this.h_ortho, el./180*pi);
             end
             if state.mapping_function_gradient == 1
                 cotan_term = zero2nan(Atmosphere.chenHerringGrad(zero2nan(el)));
@@ -2278,19 +2286,21 @@ classdef Receiver_Commons <  matlab.mixin.Copyable
             end
         end
                                 
-        function ant_mp = computeMultiPath(this, l_max, day_span)
+        function ant_mp = computeMultiPath(this, sys_grp, l_max, day_span)
             % Get Zernike multi pth coefficients
             %
             % INPUT
-            %   l_max   maximum degree for of the Zernike polynomials
+            %   sys_grp  struct containing grouping for constellations
+            %   l_max    maximum degree for of the Zernike polynomials
+            %   day_span contains offset and length of the period to be used to compute the MP maps
             %
             % SYNTAX
             %   this.computeMultiPath(l_max)
             
-            if nargin < 2
+            if nargin < 3
                 l_max = []; % managed within the function in res
             end            
-            if nargin == 3
+            if nargin == 4
                 % day_span contains offset and length of the period to be used to compute the MP maps
                 if numel(day_span) == 1 % if only len is defined, set offset to zero
                     offset = 0;
@@ -2301,9 +2311,9 @@ classdef Receiver_Commons <  matlab.mixin.Copyable
                 stop = ceil(this.sat.res.time.last.getMatlabTime) + offset;
                 start = stop - len;
                 time_lim = GPS_Time([start stop]');
-                ant_mp = this.sat.res.computeMultiPath(this.parent.getMarkerName4Ch, l_max, [], [], [], time_lim);
+                ant_mp = this.sat.res.computeMultiPath(this.parent.getMarkerName4Ch, sys_grp, l_max, [], [], [], time_lim);
             else
-                ant_mp = this.sat.res.computeMultiPath(this.parent.getMarkerName4Ch, l_max);
+                ant_mp = this.sat.res.computeMultiPath(this.parent.getMarkerName4Ch, sys_grp, l_max);
             end
         end                
         

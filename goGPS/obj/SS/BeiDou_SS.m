@@ -55,7 +55,10 @@ classdef BeiDou_SS < Satellite_System
 
         % System frequencies as struct [MHz]
         F = struct('B1', 1561.098, ...
-                   'B2', 1207.140, ...
+                   'B1C', 1575.42, ...
+                   'B2a', 1176.45, ...
+                   'B2b', 1207.140, ...
+                   'B2ab', 1191.795, ...
                    'B3', 1268.520)
 
         % Array of supported frequencies [MHz]
@@ -68,9 +71,9 @@ classdef BeiDou_SS < Satellite_System
         PRN = (1 : 37)';  % Satellites id numbers as defined in the constellation
 
         % CODE2DATA ftp://igs.org/pub/data/format/rinex303.pdf
-        CODE_RIN3_ATTRIB  = {'XIQ F' 'XIQ F', 'XIQ F'}; % last letter of the observation code
-        CODE_RIN3_DEFAULT_ATTRIB  = {'Q' 'Q' 'Q'}; % last letter of the observation code
-        CODE_RIN3_2BAND  = '276';                % id for the freq as stored in F_VEC
+        CODE_RIN3_ATTRIB  = {'XIQ F' 'XPDZLS' 'XPD' 'XIQZPD F', 'ZPD' 'XIQZPD F'}; % last letter of the observation code
+        CODE_RIN3_DEFAULT_ATTRIB  = {'Q' 'P' 'Q' 'Q'}; % last letter of the observation code
+        CODE_RIN3_2BAND  = '215786';                % id for the freq as stored in F_VEC
         IONO_FREE_PREF  = ['27';'26';'67'];  % to be evaluated which combination is really better
     end
 

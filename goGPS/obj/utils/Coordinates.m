@@ -61,12 +61,14 @@ classdef Coordinates < Exportable & handle
     end
     
     properties (SetAccess = public, GetAccess = public) % set permission have been changed from private to public (Giulio)
-        name = '';                  % Name of the point (not yet used extensively)
+        name = ''                   % Name of the point (not yet used extensively)
         time = GPS_Time             % Position time
         xyz = []                    % Coordinates are stored in meters in as cartesian XYZ ECEF [m]
         v_xyz = []                  % Coordinates velocities XYZ ECEF  [m / year]
         precision = 0.0001          % 3D limit [m] to check the equivalence among coordinates
         Cxx = [] 
+        info = struct('n_epo', [], 'n_obs', [], 's0', [], 'flag', [], 'fixing_ratio', [],'obs_used',[]) % Additional info related to the coordinate in use
+        std_scaling_factor = 30;
     end
         
     % =========================================================================
@@ -111,11 +113,58 @@ classdef Coordinates < Exportable & handle
             % SYNTAX
             %   this = append(this, pos)
             
-            this.xyz = [this.xyz; pos.xyz];
-            if ~isempty(this.Cxx) &&  ~isempty(pos.Cxx)
-                this.Cxx = cat(this.Cxx, pos.Cxx, 3);                
+            if not(isempty(pos))
+                this.xyz = [this.xyz; pos.xyz];
+                n_epo = size(this.xyz, 1);
+                
+                if ~isempty(this.Cxx) && ~isempty(pos.Cxx)
+                    this.Cxx = cat(3,this.Cxx, pos.Cxx);
+                else
+                    this.Cxx(:,:,n_epo) = nan(3,3);
+                end
+                this.time.append(pos.time);
+                
+                % Number of epocs
+                if not(isempty(pos.info.n_epo))
+                    this.info.n_epo(n_epo) = pos.info.n_epo;
+                else
+                    this.info.n_epo(n_epo) = nan;
+                end
+                
+                % Number of observations
+                if not(isempty(pos.info.n_obs))
+                    this.info.n_obs(n_epo) = pos.info.n_obs;
+                else
+                    this.info.n_obs(n_epo) = nan;
+                end
+                
+                % Sigma0 of the solution
+                if not(isempty(pos.info.s0))
+                    this.info.s0(n_epo) = pos.info.s0;
+                else
+                    this.info.s0(n_epo) = nan;
+                end
+                
+                % Validity flag
+                if not(isempty(pos.info.flag))
+                    this.info.flag(n_epo) = pos.info.flag;
+                else
+                    this.info.flag(n_epo) = -1;
+                end
+                
+                % Fixing ratio
+                if not(isempty(pos.info.fixing_ratio))
+                    this.info.fixing_ratio(n_epo) = pos.info.fixing_ratio;
+                else
+                    this.info.fixing_ratio(n_epo) = nan;
+                end
+                % Encyclopedia
+                if not(isempty(pos.info.obs_used))
+                    this.info.obs_used(n_epo) = pos.info.obs_used;
+                else
+                    this.info.obs_used(n_epo) = nan;
+                end
             end
-            this.time.append(pos.time);
         end
         
         function rem(this, idx)
@@ -367,6 +416,53 @@ classdef Coordinates < Exportable & handle
             end
         end
         
+        function cov_xyz = getCovXYZ(this)
+            % return variance covariance matrix in XYZ coordinates
+            %
+            % SYNTAX
+            %   cov_xyz = this.getCovXYZ()
+            
+            cov_xyz = this.Cxx;
+        end
+        
+        function cov_enu = getCovENU(this)
+            % return variance covariance matrix in enu (local) coordinates
+            %
+            % SYNTAX
+            %   cov_enu = this.getCovENU()
+            
+            [~, rot_mat] = Coordinates.cart2loca(this.getMedianPos.getXYZ, [0 0 0]);
+            cov_enu = this.Cxx;
+            for i = 1 :size(cov_enu,3)
+                cov_enu(:,:,i) = rot_mat*cov_enu(:,:,i)*rot_mat';
+            end
+        end
+        
+        function std_xyz = getStdXYZ(this)
+            % return std in XYZ coordinates
+            %
+            % SYNTAX
+            %   cov_xyz = this.getStdXYZ()
+            
+            std_xyz = nan(size(this.Cxx,3),3);
+            for i = 1 : size(this.Cxx,3)
+                std_xyz(i,:) = sqrt(diag(this.Cxx(:,:,i)));
+            end
+        end
+        
+        function std_enu = getStdENU(this)
+            % return vstd in ENU (local) coordinates
+            %
+            % SYNTAX
+            %   cov_enu = this.getStdENU()
+            
+            [~, rot_mat] = Coordinates.cart2loca(this.getMedianPos.getXYZ, [0 0 0]);
+            std_enu = nan(size(this.Cxx,3),3);
+            for i = 1 : size(this.Cxx,3)
+                std_enu(i,:) = sqrt(diag(rot_mat*this.Cxx(:,:,i)*rot_mat'));
+            end
+        end
+        
         function status = isEmpty(this)
             % Return the status of emptyness of the object
             %
@@ -427,6 +523,16 @@ classdef Coordinates < Exportable & handle
     % =========================================================================
     
     methods
+        function setName(this, name)
+            % Set the name of the coordinates
+            %
+            % SYNTAX
+            %   this.setName(time)
+            
+            this.name = name;
+
+        end
+        
         function setTime(this, time)
             % Set the time of the coordinates
             %
@@ -576,22 +682,9 @@ classdef Coordinates < Exportable & handle
                     id_ver = find(txt(lim(:,1) + 1) == 'F'); % +FileVersion
                     file_ok = not(isempty(regexp(txt(lim(id_ver, 1):lim(id_ver, 2)), '(?<=FileVersion[ ]*: )1.0', 'once')));
                     
-                    % Point Name
-                    timestamp = [];
-                    if file_ok
-                        id_line = find(txt(lim(:,1) + 1) == 'M'); % +MonitoringPoint
-                        if isempty(id_line)
-                            file_ok = false;
-                        else
-                            this.name = regexp(txt(lim(id_line, 1):lim(id_line, 2)), '(?<=MonitoringPoint[ ]*: ).*', 'match', 'once');
-                        end
-                    end
-                    
-                    % Data column (at the moment set here manually)
-                    data_col = [2, 3, 4] + 1; % x, y, z
-                    
                     % Data should be present
                     timestamp = [];
+                    data_start = size(lim, 1);
                     if file_ok
                         id_len_ok = find(lim(:,3)+1 >= 9);
                         data_start = id_len_ok(find(txt(lim(id_len_ok,1) + 9) == 't') + 1); % +DataStart
@@ -609,14 +702,74 @@ classdef Coordinates < Exportable & handle
                         end
                     end
                     
-                    % Import XYZ and time
+                    if file_ok
+                        % Point Name
+                        id_line = find(txt(lim(1:data_start,1) + 1) == 'M'); % +MonitoringPoint
+                        if isempty(id_line)
+                            file_ok = false;
+                        else
+                            this.name = regexp(txt(lim(id_line, 1):lim(id_line, 2)), '(?<=MonitoringPoint[ ]*: ).*', 'match', 'once');
+                        end
+                        
+                        % DataType
+                        id_line_start = find(txt(lim(1:data_start-1,1) + 1) == 'D' & txt(lim(1:data_start-1,1) + 5) == 'T'); % +MonitoringPoint
+                        id_line = id_line_start -1 + find(txt(lim(id_line_start:data_start-1,1) + 1) == '-');
+                        col = str2num(txt(lim(id_line, 1) + repmat(2:3, numel(id_line),1))) + 1;
+                        data_type = categorical();
+                        for t = 1 : numel(col)
+                            data_type(t) = categorical({txt((lim(id_line(t), 1) + 18) : lim(id_line(t), 2))});
+                        end
+                        
+                        data_col = [col(data_type == categorical({'x'})), ...
+                            col(data_type == categorical({'y'})), ...
+                            col(data_type == categorical({'z'}))];
+                    end
+                    
+                    % Data column (at the moment set here manually)
+                    data_col = [2, 3, 4] + 1; % x, y, z
+                    
+                    % Import data and time
                     if file_ok
                         this.xyz = nan(data_stop - data_start + 1, 3);
+                        n_data = data_stop - data_start + 1;
+                        this.info = struct('n_epo', zeros(n_data, 1, 'uint32'), 'n_obs', zeros(n_data, 1, 'uint32'), 's0', zeros(n_data, 1, 'single'), 'flag', zeros(n_data, 1, 'uint8'), 'fixing_ratio', zeros(n_data, 1, 'single'));
+                        this.Cxx = zeros(3, 3, n_data);
+                        
+                        id_cov = [col(data_type == categorical({'Cxx'})), ...
+                            col(data_type == categorical({'Cxy'})), ...
+                            col(data_type == categorical({'Cxz'})), ...
+                            col(data_type == categorical({'Cyy'})), ...
+                            col(data_type == categorical({'Cyz'})), ...
+                            col(data_type == categorical({'Czz'}))];
+                        
+                        id_n_epo = col(data_type == categorical({'nEpochs'}));
+                        id_n_obs = col(data_type == categorical({'nObs'}));
+                        id_fix = col(data_type == categorical({'fixingRatio'}));
                         for l = 0 : (data_stop - data_start)
                             data_line = strsplit(txt(lim(data_start + l, 1) : lim(data_start + l, 2)), ';');
                             this.xyz(l + 1, 1) = str2double(data_line{data_col(1)});
                             this.xyz(l + 1, 2) = str2double(data_line{data_col(2)});
                             this.xyz(l + 1, 3) = str2double(data_line{data_col(3)});
+                            
+                             
+                            if numel(id_cov) == 6
+                                tmp = [str2num(data_line{id_cov(1)}), str2num(data_line{id_cov(2)}), str2num(data_line{id_cov(3)}); ...
+                                    str2num(data_line{id_cov(2)}), str2num(data_line{id_cov(4)}), str2num(data_line{id_cov(5)}); ...
+                                    str2num(data_line{id_cov(3)}), str2num(data_line{id_cov(5)}), str2num(data_line{id_cov(6)})]./1e6;
+                                if any(tmp(:))
+                                    this.Cxx(:,:,l + 1) = tmp;
+                                end
+                            end
+                            
+                            if any(id_n_epo)
+                                this.info.n_epo(l + 1) = uint32(str2double(data_line{id_n_epo}));
+                            end
+                            if any(id_n_obs)
+                                this.info.n_obs(l + 1) = uint32(str2double(data_line{id_n_obs}));
+                            end
+                            if any(id_fix)
+                                this.info.fixing_ratio(l + 1) = single(str2double(data_line{id_fix}));
+                            end
                         end
                         this.time = GPS_Time(timestamp);
                     end
@@ -644,6 +797,35 @@ classdef Coordinates < Exportable & handle
             fh = showCoordinatesENU(coo_list);
         end
         
+        function fh_list = showNData(coo_list)
+            fh_list = [];
+            for coo = coo_list(:)'
+                if ~isempty(coo.info.n_obs)
+                    if not(isempty(coo.name))
+                        fig_name = sprintf('%s #data', coo.name);
+                    else
+                        fig_name = sprintf('#data');
+                    end
+                    fh = figure('Visible', 'off');  Core_UI.beautifyFig(fh);
+                    fh.Name = sprintf('%03d: %s', fh.Number, fig_name);  fh.NumberTitle = 'off';
+                    
+                    plotSep(coo.time.getMatlabTime, coo.info.n_obs, '.-', 'MarkerSize', 10, 'LineWidth', 2);
+                    ylabel('n obs');
+                    yyaxis right
+                    plotSep(coo.time.getMatlabTime, coo.info.n_epo, '.-', 'MarkerSize', 10, 'LineWidth', 2);
+                    ylabel('n epochs');
+                    
+                    xlim([coo.time.first.getMatlabTime coo.time.last.getMatlabTime]);
+                    setTimeTicks(4);
+                    
+                    fh_list = [fh_list fh];
+                    Core_UI.beautifyFig(fh);
+                    Core_UI.addBeautifyMenu(fh);
+                    fh.Visible = iif(Core_UI.isHideFig, 'off', 'on'); drawnow;
+                end
+            end
+        end
+        
         function fh_list = showCoordinates(mode, coo_list, coo_ref, n_obs)
             % Plot ENU or XYZ coordinates
             %
@@ -659,6 +841,7 @@ classdef Coordinates < Exportable & handle
             end
             fh_list = [];
             thr = 0.8;
+            flag_distr = false;
             
             str_title{2} = sprintf('STD (detrended)');
             str_title{3} = sprintf('STD (detrended)');
@@ -669,17 +852,19 @@ classdef Coordinates < Exportable & handle
                 if ~pos.isEmpty
                     if nargin < 3 || isempty(coo_ref)
                         if not(isempty(pos.name))
-                            str_title{1} = sprintf('%s\nPosition stability %s [mm]\nSTD (detrended)', pos.name, mode);
+                            str_title{1} = sprintf('%s\nPosition stability %s [mm]\nSTD (vs smoothed signal)', pos.name, mode);
                             fig_name = sprintf('d%s %s', mode, pos.name);
                         else
-                            str_title{1} = sprintf('Position stability %s [mm]\nSTD (detrended)', mode);
+                            str_title{1} = sprintf('Position stability %s [mm]\nSTD (vs smoothed signal)', mode);
                             fig_name = sprintf('d%s', mode);
                         end
                         
                         if strcmpi(mode, 'XYZ')
                             pos_diff = (pos.getXYZ - pos.getMedianPos.getXYZ) * 1e3;
+                            pos_std = pos.getStdXYZ .* 1e3;
                         elseif strcmpi(mode, 'ENU')
                             pos_diff = pos.getLocal(pos.getMedianPos) * 1e3;
+                            pos_std = pos.getStdENU .* 1e3;
                         end
                         flag_time = true;
                         if isa(pos.time, 'GPS_Time') && ~pos.time.isEmpty
@@ -695,25 +880,43 @@ classdef Coordinates < Exportable & handle
                             flag_time = false;
                             t = (1 : size(pos_diff, 1))';
                         end
+                        t_max = t(end);
                     elseif nargin > 2 && not(isempty(coo_ref)) % plot baseline
                         if not(isempty(pos.name))
-                            str_title{1} = sprintf('%s - %s\nBaseline stability %s [mm]\nSTD (detrended)', pos.name, coo_ref.name, mode);
+                            str_title{1} = sprintf('%s - %s\nBaseline stability %s [mm]\nSTD (vs smoothed signal)', pos.name, coo_ref.name, mode);
                             fig_name = sprintf('d%s %s - %s', mode, pos.name, coo_ref.name);
                         else
-                            str_title{1} = sprintf('Baseline stability %s [mm]\nSTD (detrended)', mode);
+                            str_title{1} = sprintf('Baseline stability %s [mm]\nSTD (vs smoothed signal)', mode);
                             fig_name = sprintf('d%s bsl', mode);
                         end
                         
                         pos_diff = [];
                         if isa(pos.time, 'GPS_Time') && ~pos.time.isEmpty
-                            [t_comm, idx_1, idx2] = intersect(round(coo_ref.time.getRefTime(pos.time.first.getMatlabTime)),round(pos.time.getRefTime(pos.time.first.getMatlabTime)));
+                            rate = round(coo_ref.time.getRate);
+                            t_ref = (round((pos.time.first.getMatlabTime * 86400 - rate/2) / rate) * rate + rate/2) / 86400;
+                            t1 = round(coo_ref.time.getRefTime(t_ref) / rate) * rate;
+                            t2 = round(pos.time.getRefTime(t_ref) / rate) * rate;
+                            [t_comm, idx1, idx2] = intersect(t1,t2);
                             t = pos.time.first.getMatlabTime + t_comm/86400;
                             if strcmpi(mode, 'XYZ')
-                                pos_diff = (pos.xyz(idx2,:) - coo_ref.xyz(idx_1,:))*1e3;
+                                pos_diff = (pos.xyz(idx2,:) - coo_ref.xyz(idx1,:))*1e3;
                                 pos_diff = bsxfun(@minus, pos_diff, median(pos_diff,1, 'omitnan'));
+                                % Compute formal std of the baseline
+                                std1 = coo_ref.getStdXYZ.^2;
+                                std2 = pos.getStdXYZ.^2;
+                                % covariance propagation: cov1 + cov2 + 2 * cross
+                                % cross covariance is missing, propagation is incomplete
+                                pos_std = sqrt(std1(idx1,:) + std2(idx2,:)) .* 1e3; 
                             elseif strcmpi(mode, 'ENU')
-                                pos_diff = Coordinates.cart2local(median(coo_ref.xyz,1,'omitnan'),pos.xyz(idx2,:) - coo_ref.xyz(idx_1,:) )*1e3;
+                                pos_diff = Coordinates.cart2local(median(coo_ref.xyz,1,'omitnan'),pos.xyz(idx2,:) - coo_ref.xyz(idx1,:) )*1e3;
+                                % Compute formal std of the baseline
+                                std1 = coo_ref.getStdENU.^2;
+                                std2 = pos.getStdENU.^2;
+                                % covariance propagation: cov1 + cov2 + 2 * cross
+                                % cross covariance is missing, propagation is incomplete
+                                pos_std = sqrt(std1(idx1,:) + std2(idx2,:)) .* 1e3; 
                             end
+                            t_max = coo_ref.time.last.getMatlabTime;
                             flag_time = true;
                         else
                             if numel(coo_ref.xyz) == numel(pos.xyz)
@@ -723,18 +926,26 @@ classdef Coordinates < Exportable & handle
                             else
                                 log.addError(sprintf('No time in coordinates and number off coordinates in ref different from coordinate in the second receiver'))
                             end
+                            t_max = t(end);
                         end
                         pos_diff = bsxfun(@minus, pos_diff,median(pos_diff,1,'omitnan'));
                     end
                     
                     
-                    fh = figure('Visible', 'off');  subplot(3,1,1); Core_UI.beautifyFig(fh);
+                    fh = figure('Visible', 'off');
+                    if flag_distr
+                        subplot(3, 12, 1:9);
+                    else
+                        subplot(3,1,1);
+                    end
+                    Core_UI.beautifyFig(fh);
                     fh.Name = sprintf('%03d: %s', fh.Number, fig_name);  fh.NumberTitle = 'off';
                     
                     if size(pos_diff, 1) > 1
                         if nargin >= 4 && n_obs > 0
                             id_ok = (max(1, size(pos_diff,1) - n_obs + 1)) : size(pos_diff,1);
                             pos_diff = pos_diff(id_ok, :);
+                            pos_std = pos_std(id_ok, :);
                             t = t(id_ok);
                         end
                         
@@ -744,88 +955,108 @@ classdef Coordinates < Exportable & handle
                             color_order = Core_UI.getColor(i * [1 1 1], numel(coo_list));
                         end      
                         
-                        setAxis(fh, 1);
-                        e = pos_diff(:,1);
-                        if thr < 1
-                            [data, lid_ko, trend] = strongFilterStaticData(e, 0.8, 7);
-                            setAxis(fh, 1);
-                            Core_Utils.plotSep(t, e, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', [0.5 0.5 0.5]); hold on;
-                            Core_Utils.plotSep(t, data, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', color_order(1,:));
-                            e = data;
-                        else
-                            setAxis(fh, 1);
-                            Core_Utils.plotSep(t, e, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', color_order(1,:)); hold on;
-                            lid_ko = false(numel(t), 1);
-                            trend = Core_Utils.interp1LS(t(~isnan(pos_diff(:,1))), pos_diff(~isnan(pos_diff(:,1)),1), 1, t);
+                        data = {};
+                        data_component = {};
+                        yl = {};
+                        for c = 1 : 3
+                            % MAIN PLOT --------------------------------------------------------------------------------------------------------
+                            setAxis(fh, c);
+                            if flag_distr
+                                subplot(3, 12, (c-1)*12 + (1:9));
+                            else
+                                subplot(3, 1, c);
+                            end
+                            data_component{c} = pos_diff(:,c);
+                            setAxis(fh, c);
+                            
+                            % Plot confidence level
+                            if any(pos_std(:))
+                                yyaxis right; ylabel('Formal std [mm]');
+                                patch([t(:); t(end); t(1)], [pos_std(:, c); 0; 0], color_order(c,:), 'FaceColor', color_order(c,:),'EdgeColor','none','FaceAlpha',0.1,'HandleVisibility','off'); hold on;
+                                tmp_ax = gca;
+                                tmp_ax.YColor = min(1, color_order(c,:)+0.2);
+                                p = plot(t, pos_std(:, c), 'Color', [tmp_ax.YColor 0.2]);
+                                ylim([0 max(0.5, 4 * perc(pos_std(:),0.95))]);
+                                yyaxis left;
+                            end
+                            
+                            if thr < 1
+                                pos_var = nan2zero(pos_std(:, c).^2);
+                                pos_var(pos_var == 0) = 100.^2; % 100 meters of std
+                                [data{c}, lid_ko, trend, data_smooth] = strongFilterStaticData([t data_component{c} pos_var], 0.8, 7);
+                                setAxis(fh, c);
+                                
+                                % Plot all the data
+                                Core_Utils.plotSep(t, data_component{c}, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', [0.5 0.5 0.5 0.5]);
+                                
+                                % Plot only supposely good data
+                                Core_Utils.plotSep(t, data{c}, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', color_order(c,:));
+                                
+                                % Plot smoothed signal
+                                plot(t, data_smooth, '.--', 'LineWidth', 1.5, 'Color', max(0, color_order(c,:)-0.2));
+                            else
+                                data{c} = data_component{c};
+                                setAxis(fh, c);
+                                % Plot data
+                                Core_Utils.plotSep(t, data_component{c}, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', color_order(c,:));
+                                lid_ko = false(numel(t), 1);
+                                
+                                % Use a simple trend on data as smothed signal
+                                data_smooth = Core_Utils.interp1LS(t(~isnan(pos_diff(:,1))), pos_diff(~isnan(pos_diff(:,c)),c), 1, t);
+                            end
+                            setAxis(fh, c);
+                            ax(4-c) = gca(fh);
+                            if (t(end) > t(1))
+                                xlim([t(1) t_max]);
+                            end
+                            yl{c} = minMax(data{c}) + 2 * [-1 1];
+                            yl{c} = [min(-20, yl{c}(1)) max(20, yl{c}(2))];
+                            ylim(yl{c});
+                            if flag_time
+                                setTimeTicks(4);
+                            end
+                            h = ylabel([axis_label{c} ' [mm]']); h.FontWeight = 'bold';
+                            grid on;
+                            str_title{c} = sprintf('%s %s%.2f', str_title{c}, iif(i>1, '- ', ''), std((data{c}(~lid_ko) - data_smooth(~lid_ko)), 'omitnan'));
+                            h = title(str_title{c}, 'interpreter', 'none'); h.FontWeight = 'bold';
+                        end     
+                            
+                        if flag_distr
+                            for c = 1 : 3
+                                % DISTRIBUTION PLOT ------------------------------------------------------------------------------------------------
+                                
+                                subplot(3, 12, c*12 + (-1:0));
+                                %%
+                                % Get distribution of data
+                                
+                                [n_res, x] = hist(data{c}, max(round(diff(minMax(data{c}))/1), 20));
+                                rate_x = mean(diff(x));
+                                padding = 1:0.5:10;
+                                x = [-fliplr(padding) * rate_x + min(x),  x, padding * rate_x + max(x)];
+                                n_res = [0*padding n_res 0*padding];
+                                n_res_var = 1./ n_res.^2;
+                                
+                                % Normalize to one
+                                n_res = n_res ./ sum(n_res);
+                                
+                                % Get distribution limits
+                                lim = minMax(x);
+                                x_out = linspace(lim(1), lim(end), 1000);
+                                
+                                [~, ~, ~, y] = splinerMat(x', n_res', max(3*rate_x, 2), 1e-4, x_out);
+                                %x_out = x;
+                                %y = n_res'; 
+                                
+                                ax_tmp = setAxis(fh, c + 3);
+                                plot(max(0,y), x_out', 'LineWidth', 1, 'Color',color_order(c,:)); hold on;
+                                patch([max(0,y); 0; 0], [x_out, x_out(end), x_out(1)]', min(1, color_order(c,:) + 0.2), 'FaceColor', min(1, color_order(c,:) + 0.2), 'EdgeColor', 'none', 'FaceAlpha', 0.2, 'HandleVisibility', 'off');
+                                ax_tmp.XAxis.TickValues = [];
+                                ylim([min(x(1), yl{c}(1)) max(x(end), yl{c}(2))]);
+                                xlim([-0.01 max(y)+0.1]);
+                                
+                                title('Distribution');
+                            end
                         end
-                        setAxis(fh, 1);
-                        ax(3) = gca(fh);
-                        if (t(end) > t(1))
-                            xlim([t(1) t(end)]);
-                        end
-                        yl = minMax(e);
-                        ylim([min(-20, yl(1)) max(20, yl(2))]);
-                        if flag_time
-                            setTimeTicks(4);
-                        end
-                        h = ylabel([axis_label{1} ' [mm]']); h.FontWeight = 'bold';
-                        grid on;
-                        str_title{1} = sprintf('%s %s%.2f', str_title{1}, iif(i>1, '- ', ''), std((e(~lid_ko) - trend(~lid_ko)), 'omitnan'));
-                        h = title(str_title{1}, 'interpreter', 'none'); h.FontWeight = 'bold';
-                        subplot(3,1,2);
-                        
-                        n = pos_diff(:,2);                        
-                        if thr < 1
-                            [data, lid_ko, trend] = strongFilterStaticData(n, 0.8, 7);
-                            setAxis(fh, 2);
-                         Core_Utils.plotSep(t, n, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', [0.5 0.5 0.5]); hold on;
-                            Core_Utils.plotSep(t, data, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', color_order(2,:)); 
-                            n = data;
-                        else
-                            setAxis(fh, 2);
-                        Core_Utils.plotSep(t, n, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', color_order(2,:)); hold on;
-                            trend = Core_Utils.interp1LS(t(~isnan(pos_diff(:,2))), pos_diff(~isnan(pos_diff(:,2)),2), 1, t);
-                        end
-                        ax(2) = gca(fh);
-                        if (t(end) > t(1))
-                            xlim([t(1) t(end)]);
-                        end
-                        yl = minMax(n);
-                        ylim([min(-20, yl(1)) max(20, yl(2))]);
-                        if flag_time
-                            setTimeTicks(4);
-                        end
-                        h = ylabel([axis_label{2} ' [mm]']); h.FontWeight = 'bold';
-                        str_title{2} = sprintf('%s %s%.2f', str_title{2}, iif(i>1, '- ', ''), std((n(~lid_ko) - trend(~lid_ko)), 'omitnan'));
-                        h = title(str_title{2}, 'interpreter', 'none'); h.FontWeight = 'bold';
-                        grid on;
-                        subplot(3,1,3);
-                        
-                        up = pos_diff(:,3);                        
-                        if thr < 1
-                            [data, lid_ko, trend] = strongFilterStaticData(up, 0.8, 7);
-                            setAxis(fh, 3);
-                        Core_Utils.plotSep(t, up, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', [0.5 0.5 0.5]); hold on;
-                            Core_Utils.plotSep(t, data, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', color_order(3,:)); 
-                            up = data;
-                        else
-                            trend = Core_Utils.interp1LS(t(~isnan(pos_diff(:,3))), pos_diff(~isnan(pos_diff(:,3)),3), 1, t);
-                            setAxis(fh, 3);
-                        Core_Utils.plotSep(t, up, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', color_order(3,:)); hold on;
-                        end
-                        ax(1) = gca(fh);
-                        if (t(end) > t(1))
-                            xlim([t(1) t(end)]);
-                        end
-                        yl = minMax(up);
-                        ylim([min(-20, yl(1)) max(20, yl(2))]);
-                        if flag_time
-                            setTimeTicks(4);
-                        end
-                        h = ylabel([axis_label{3} ' [mm]']); h.FontWeight = 'bold';
-                        str_title{3} = sprintf('%s %s%.2f', str_title{3}, iif(i>1, '- ', ''), std((up(~lid_ko) - trend(~lid_ko)), 'omitnan'));
-                        h = title(str_title{3}, 'interpreter', 'none'); h.FontWeight = 'bold';
-                        grid on;
                         linkaxes(ax, 'x');
                         grid on;
                     else
@@ -961,7 +1192,7 @@ classdef Coordinates < Exportable & handle
             % Plot East North Up coordinates
             %
             % SYNTAX 
-            %   this.showCoordinatesENU(coo_list);
+            %   this.showCoordinatesPlanarUp(coo_list);
             
             log = Core.getLogger();
             for i = 1 : numel(coo_list)

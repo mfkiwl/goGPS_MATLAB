@@ -135,7 +135,7 @@ classdef Core_Sky < handle
             else
                 new_cc = cc;
             end
-            flag_new_cc = ~strcmp(unique(this.cc), unique(new_cc));
+            flag_new_cc = ~strcmp(unique(this.cc.system), unique(new_cc.system));
             if flag_new_cc
                 this.clearOrbit;
             end
@@ -149,7 +149,7 @@ classdef Core_Sky < handle
             flag_time_loaded = ~isempty(this.getFirstEpochClock) && this.getFirstEpochClock <= start_date && this.getLastEpochClock >= stop_date;
             %flag_update_sky = start_date < this.getCoordTime.first || stop_date > this.getCoordTime.last || ...
             %    start_date < this.getClockTime.first || stop_date > this.getClockTime.last;
-            if ~isempty(start_date) && (flag_new_cc || (~flag_coo_loaded || ~flag_time_loaded))
+            if ~isempty(start_date) && (flag_new_cc || (~flag_coo_loaded || (~flag_time_loaded && ~flag_eph_only)))
                 this.group_delays = zeros(this.cc.getNumSat(),82); % group delay of code measurements (meters) referenced to their constellation reference:
                 this.phase_delays = zeros(this.cc.getNumSat(),82); % group delay of code measurements (meters) referenced to their constellation reference:
                 
@@ -207,8 +207,8 @@ classdef Core_Sky < handle
                         end_time = this.getLastEpochCoord();
                         % if true %isempty(end_time) || isempty(gps_time) || (end_time - gps_time) > -1e-3
                             this.addSp3(eph_f_name{i}, clock_in_eph);
-                            this.coord = this.coord(1 : find(any(this.coord(:,:,1),2), 1, 'last'),:,:);
-                            this.clock = this.clock(1 : find(any(this.clock(:,:),2), 1, 'last'),:,:);
+                            %this.coord = this.coord(1 : find(any(this.coord(:,:,1),2), 1, 'last'),:,:);
+                            %this.clock = this.clock(1 : find(any(this.clock(:,:),2), 1, 'last'),:,:);
                         % end
                         this.coord_type = 0; % center of mass
                         this.poly_type = 0; % center of mass
@@ -834,9 +834,11 @@ classdef Core_Sky < handle
                         c_n_sat = size(this.coord,2);
                         if memb_idx(1) == true && memb_idx(2) == false
                             n_new_epochs = idx_last - size(this.coord, 1);
-                            this.coord = cat(1,this.coord,zeros(n_new_epochs,c_n_sat,3));
-                            if clock_flag
-                                this.clock = cat(1,this.clock,zeros(n_new_epochs,c_n_sat));
+                            if n_new_epochs > 0
+                                this.coord = cat(1,this.coord,zeros(n_new_epochs,c_n_sat,3));
+                                if clock_flag
+                                    this.clock = cat(1,this.clock,zeros(n_new_epochs,c_n_sat));
+                                end
                             end
                         elseif memb_idx(1) == false && memb_idx(2) == true
                             this.time_ref_coord = sp3_first_ep.getCopy();

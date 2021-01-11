@@ -169,6 +169,15 @@ classdef Residuals < Exportable
                 if isempty(res.prn)
                     code_new = [];
                 else
+                    % uniform the size of obs_code
+                    if size(res.obs_code,2) < size(this.obs_code,2)
+                        n_el = size(this.obs_code,2);
+                        res.obs_code = [res.obs_code, ' ' * char(ones(size(res.obs_code,1), n_el - size(res.obs_code,2), 'uint8'))];
+                    end
+                    if size(res.obs_code,2) > size(this.obs_code,2)
+                        n_el = size(res.obs_code,2);
+                        this.obs_code = [this.obs_code, ' ' * char(ones(size(this.obs_code,1), n_el - size(this.obs_code,2), 'uint8'))];
+                    end
                     code_new = Constellation_Collector.obsCode2num(res.obs_code, res.prn);
                     res.remEntry(code_new == 0);
                 end
@@ -497,7 +506,7 @@ classdef Residuals < Exportable
     %%  MULTIPATH
     % =========================================================================
     methods
-        function ant_mp = computeMultiPath(this, marker_name, l_max, flag_reg, is_ph, mode, time_lim)
+        function ant_mp = computeMultiPath(this, marker_name, sys_grp, l_max, flag_reg, is_ph, mode, time_lim)
             % Get multi path maps in different modes
             %
             % z_map  Zernike
@@ -510,6 +519,7 @@ classdef Residuals < Exportable
             %
             % INPUT
             %   marker_name     name of the station
+            %   sys_grp         constellation grouping for MP estimation
             %   l_max           maximum degree of the 3 steps of the zernike interpolation [l_max1, l_max2, l_max3]
             %                   to disable Zernike use l_max = 0
             %   flag_reg        add regularization points (pseudo obs at 0) in the empty areas of the sky
@@ -523,12 +533,12 @@ classdef Residuals < Exportable
             %   For mode 0 and 1 the output matrix will always be 0.5 x 0.5 degrees 
             %
             % SYNTAX
-            %   this.computeMultiPath(marker_name, <l_max=[43,43,43]>, <flag_reg=true>, <is_ph=true>, <mode=[0 5 1]>)
+            %   this.computeMultiPath(marker_name, sys_grp, <l_max=[43,43,43]>, <flag_reg=true>, <is_ph=true>, <mode=[0 5 1]>)
             
             state = Core.getCurrentSettings;
             flag_discard_co = false;
             
-            if nargin < 6 || isempty(mode)
+            if nargin < 7 || isempty(mode)
                 mode = 0; % Z + stacking
             end
             if numel(mode) == 3
@@ -566,7 +576,7 @@ classdef Residuals < Exportable
                     ltype_of_grids = logical([1 1 1 1 1 1]); % All enabled
                 end
                 
-                if nargin < 3 || isempty(l_max)
+                if nargin < 4 || isempty(l_max)
                     l_max = state.mp_l_max;
                 end
                 % Legacy support
@@ -590,11 +600,11 @@ classdef Residuals < Exportable
                     marker_name = 'UNKN';
                 end
                 
-                if nargin < 4 || isempty(flag_reg)
+                if nargin < 5 || isempty(flag_reg)
                     flag_reg = true;
                 end
                 
-                if nargin < 5 || isempty(is_ph)
+                if nargin < 6 || isempty(is_ph)
                     % If there are phases use phases
                     is_ph = any((serialize(this.obs_code(:,2:3:end-1))) == 'L');
                 end
@@ -610,7 +620,7 @@ classdef Residuals < Exportable
                 
                 cc = Core.getConstellationCollector();
                 log.addMarkedMessage(sprintf('Computing azimuth and elevation for "%s"', marker_name));
-                if nargin == 7 && ~isempty(time_lim)
+                if nargin == 8 && ~isempty(time_lim)
                     id_span = this.time.getNominalTime(1) >= time_lim.first & this.time.getNominalTime(1) <= time_lim.last;
                     [az, el, ~, ~, go_id] = this.getAzimuthElevation(id_span);
                 else
@@ -630,22 +640,31 @@ classdef Residuals < Exportable
                 end
                 
                 for sys_c = sys_c_list(:)'
-                    ids = find(obs_code(:,1) == sys_c & any((obs_code(:,2:3:end-1)) == search_obs, 2));
+                    ids = find(ismember(obs_code(:,1), sys_c) & any((obs_code(:,2:3:end-1)) == search_obs, 2));
                     if ~any(ids)
                         log.addWarning(sprintf('No %s found in %s for constellation %s', name, marker_name, cc.getSysName(sys_c)));
                     else                        
-                        obs_id_num = cc.obsCode2num(obs_code(ids, :), zeros(size(ids, 1), 1)); % get all the data of the same frequency - all the satellites
+                        obs_id_num = cc.obsCode2num([repmat('G', numel(ids),1) obs_code(ids, 2:end)], zeros(size(ids, 1), 1)); % get all the data of the same frequency - all the satellites
                         uobs_id = unique(obs_id_num);
                         for  t = 1 : numel(uobs_id)
                             id = ids(obs_id_num == uobs_id(t)); % tracking for the specific obs_code
                             trk_code = obs_code(id(1),2:end);
+                            if (numel(trk_code) > 5) && (all((trk_code(5:end)) == '_'))
+                                trk_code = trk_code(1:4);
+                            end
+                            % recompute id if grouping is present
+                            if numel(sys_grp.(sys_c)) > 1
+                                ext_ids = find(ismember(obs_code(:,1), sys_grp.(sys_c)) & any((obs_code(:,2:3:end-1)) == search_obs, 2));
+                                obs_id_num = cc.obsCode2num([repmat('G', numel(ext_ids),1) obs_code(ext_ids, 2:end)], zeros(size(ext_ids, 1), 1)); % get all the data of the same frequency - all the satellites
+                                id = ext_ids(obs_id_num == uobs_id(t)); % tracking for the specific obs_code
+                            end
                             
                             data_found = false;
                             
                             res = zero2nan(this.value(id_span, id));
                             
                             % time filtering, search for badly estimated residuals
-                            tmp = movmedian(std(res', 'omitnan'), 21, 'omitnan');
+                            tmp = zero2nan(movmedian(std(res, 0, 2, 'omitnan'), 21, 'omitnan'));
                             thr = 5 * median(tmp, 'omitnan');
                             id_ko = flagMerge(tmp > thr, 11);
                             res(id_ko, :) = nan;
@@ -953,6 +972,9 @@ classdef Residuals < Exportable
                                     ant_mp.(sys_c) = struct;
                                 end
                                 if ~isfield(ant_mp.(sys_c), trk_code)
+                                    if (numel(trk_code) == 8) && sum(trk_code(5:end) == '_') == 4
+                                        trk_code = trk_code(1:4);
+                                    end
                                     trk_code = strrep(trk_code, ' ', '_'); % structures do not support spaces
                                     ant_mp.(sys_c).(trk_code) = struct;
                                 end
@@ -1204,7 +1226,7 @@ classdef Residuals < Exportable
                     scale = 1e2;
                 end
                 
-                if nargin < 2
+                if nargin < 2 || isempty(marker_name)
                     marker_name = '';
                 end
                 

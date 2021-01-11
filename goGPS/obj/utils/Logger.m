@@ -769,9 +769,9 @@ classdef Logger < handle
             if this.isScreenOut % Screen
                 if (color_mode)
                     cprintf(Logger.ORANGE, 'Warning: ');
-                    cprintf('text', [text '\n']);
+                    cprintf('text', '%s\n', text);
                 else
-                    fprintf(['WARNING: ' text '\n']);
+                    fprintf('%s\n',['WARNING: ' text]);
                 end
             end
             if this.isFileOut % File
@@ -794,9 +794,9 @@ classdef Logger < handle
             if this.isScreenOut || this.ERROR_ON_CONSOLE % Screen
                 if (color_mode)
                     cprintf('err', 'Error: ');
-                    cprintf('text', [text '\n']);
+                    cprintf('text', '%s\n', text);
                 else
-                    fprintf(['ERROR: ' text '\n']);
+                    fprintf('%s\n',['ERROR: ' text]);
                 end
             end
             if this.isFileOut % File

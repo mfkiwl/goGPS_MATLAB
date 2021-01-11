@@ -510,32 +510,34 @@ classdef GNSS_Station < handle
     %% METHODS ADVANCED
     % ==================================================================================================================================================
     methods
-        function getMP(this)
-            
-        end
-        
-        function updateMultiPath(sta_list, day_span, mp_mode)
+        function updateMultiPath(sta_list, day_span, mp_mode, sys_grp)
             sta_list = sta_list(~sta_list.isEmpty);
             log = Core.getLogger();
+            if (nargin < 4) || isempty(sys_grp)
+                sys_grp = struct('G', 'G', 'R', 'R', 'E', 'E', 'J', 'J', 'C', 'C', 'I', 'I', 'S', 'S');
+            end
             for rec = sta_list(:)'
                 log.addMarkedMessage(sprintf('Updating multipath corrections for "%s"', rec.getMarkerName4Ch));
                 % If resduals ph by ph are available on out use them
                 if nargin >= 2 && ~isempty(day_span)
                     if isempty(rec(1).out.sat.res)
-                        ant_mp = rec.work.computeMultiPath([], day_span);
+                        ant_mp = rec.work.computeMultiPath(sys_grp, [], day_span);
                     else
-                        ant_mp = rec.out.computeMultiPath([], day_span);
+                        ant_mp = rec.out.computeMultiPath(sys_grp, [], day_span);
                     end
                 else
                     if isempty(rec(1).out.sat.res)
-                        ant_mp = rec.work.computeMultiPath();
+                        ant_mp = rec.work.computeMultiPath(sys_grp);
                     else
-                        ant_mp = rec.out.computeMultiPath();
+                        ant_mp = rec.out.computeMultiPath(sys_grp);
                     end
                 end
                 
                 % rec.ant_mp = rec.ant_mp + ant_mp;
                 flag_update = false;
+                if isempty(rec.ant_mp) && (nargin >= 3 && not(isempty(mp_mode)))
+                    rec.ant_mp = rec.getAntennaMultiPath();
+                end
                 if (isempty(rec.work) || isempty(rec.work.ant_mp)) && ~(nargin >= 3 && not(isempty(mp_mode)))
                     % Zerniche multipath is not yet in the receiver
                     rec.ant_mp = ant_mp;
@@ -556,9 +558,13 @@ classdef GNSS_Station < handle
                             else
                                 for trk = trk_list
                                     trk = strrep(trk{1}, ' ', '_'); % Spaces are not supported in structures
-                                    if ~isfield(rec.ant_mp.(sys_c), trk) || ((trk(end) == 'I') && Core.getCurrentSettings.flag_rec_mp == 0)
+                                    short_trk = trk;
+                                    if numel(short_trk) > 3 && all(short_trk(4:end) == '_')
+                                        short_trk = short_trk(1:3);
+                                    end
+                                    if (~isfield(rec.ant_mp.(sys_c), trk) && ~isfield(rec.ant_mp.(sys_c), short_trk)) || ((trk(end) == 'I') && Core.getCurrentSettings.flag_rec_mp == 0)
                                         % This tracking frequency is not present into the old Zernike MultiPath set of coefficients
-                                        rec.ant_mp.(sys_c).(trk) = ant_mp.(sys_c).(trk);
+                                        rec.ant_mp.(sys_c).(short_trk) = ant_mp.(sys_c).(trk);
                                     else
                                         % Get the old map that was applied
                                         if nargin >= 3 && not(isempty(mp_mode))
@@ -566,32 +572,47 @@ classdef GNSS_Station < handle
                                             if isempty(applied_ant)
                                                 applied_ant = rec.getAntennaMultiPath();
                                             end
+                                            if isfield(applied_ant.(sys_c), trk)
+                                                app_trk = trk; % longname
+                                            else
+                                                app_trk = short_trk; % shortname
+                                            end
                                             switch mp_mode
                                                 case 0, applied_map = 0;
-                                                case 1, applied_map = applied_ant.(sys_c).(trk).z_map;
-                                                case 2, applied_map = applied_ant.(sys_c).(trk).r_map;
-                                                case 3, applied_map = applied_ant.(sys_c).(trk).g_map;
-                                                case 4, applied_map = applied_ant.(sys_c).(trk).c_map;
-                                                case 5, applied_map = applied_ant.(sys_c).(trk).g1_map;
-                                                case 6, applied_map = applied_ant.(sys_c).(trk).c1_map;
+                                                case 1, applied_map = applied_ant.(sys_c).(app_trk).z_map;
+                                                case 2, applied_map = applied_ant.(sys_c).(app_trk).r_map;
+                                                case 3, applied_map = applied_ant.(sys_c).(app_trk).g_map;
+                                                case 4, applied_map = applied_ant.(sys_c).(app_trk).c_map;
+                                                case 5, applied_map = applied_ant.(sys_c).(app_trk).g1_map;
+                                                case 6, applied_map = applied_ant.(sys_c).(app_trk).c1_map;
                                             end
                                         else
+                                            if ~isfield(applied_ant.(sys_c), trk)
+                                                app_trk = trk; % longname
+                                            else
+                                                app_trk = short_trk; % shortname
+                                            end
                                             switch Core.getCurrentSettings.flag_rec_mp
                                                 case 0, applied_map = 0;
-                                                case 1, applied_map = applied_ant.(sys_c).(trk).z_map;
-                                                case 2, applied_map = applied_ant.(sys_c).(trk).r_map;
-                                                case 3, applied_map = applied_ant.(sys_c).(trk).g_map;
-                                                case 4, applied_map = applied_ant.(sys_c).(trk).c_map;
-                                                case 5, applied_map = applied_ant.(sys_c).(trk).g1_map;
-                                                case 6, applied_map = applied_ant.(sys_c).(trk).c1_map;
+                                                case 1, applied_map = applied_ant.(sys_c).(app_trk).z_map;
+                                                case 2, applied_map = applied_ant.(sys_c).(app_trk).r_map;
+                                                case 3, applied_map = applied_ant.(sys_c).(app_trk).g_map;
+                                                case 4, applied_map = applied_ant.(sys_c).(app_trk).c_map;
+                                                case 5, applied_map = applied_ant.(sys_c).(app_trk).g1_map;
+                                                case 6, applied_map = applied_ant.(sys_c).(app_trk).c1_map;
                                             end
                                         end
-                                        rec.ant_mp.(sys_c).(trk).z_map  = Core_Utils.resize2(applied_map, size(ant_mp.(sys_c).(trk).z_map)) + ant_mp.(sys_c).(trk).z_map;
-                                        rec.ant_mp.(sys_c).(trk).r_map  = Core_Utils.resize2(applied_map, size(ant_mp.(sys_c).(trk).r_map)) + ant_mp.(sys_c).(trk).r_map;
-                                        rec.ant_mp.(sys_c).(trk).g_map  = Core_Utils.resize2(applied_map, size(ant_mp.(sys_c).(trk).g_map)) + ant_mp.(sys_c).(trk).g_map;
-                                        rec.ant_mp.(sys_c).(trk).c_map  = Core_Utils.resize2(applied_map, size(ant_mp.(sys_c).(trk).c_map)) + ant_mp.(sys_c).(trk).c_map;
-                                        rec.ant_mp.(sys_c).(trk).g1_map = Core_Utils.resize2(applied_map, size(ant_mp.(sys_c).(trk).g1_map)) + ant_mp.(sys_c).(trk).g1_map;
-                                        rec.ant_mp.(sys_c).(trk).c1_map = Core_Utils.resize2(applied_map, size(ant_mp.(sys_c).(trk).c1_map)) + ant_mp.(sys_c).(trk).c1_map;
+                                        if isfield(rec.ant_mp.(sys_c), trk) && numel(trk) > 3
+                                            % I prefer short names
+                                            rec.ant_mp.(sys_c).(short_trk) = rec.ant_mp.(sys_c).(trk); % copy short name
+                                            rec.ant_mp.(sys_c) = rmfield(rec.ant_mp.(sys_c), trk); % remove long name;
+                                        end
+                                        rec.ant_mp.(sys_c).(short_trk).z_map  = Core_Utils.resize2(applied_map, size(ant_mp.(sys_c).(trk).z_map)) + ant_mp.(sys_c).(trk).z_map;
+                                        rec.ant_mp.(sys_c).(short_trk).r_map  = Core_Utils.resize2(applied_map, size(ant_mp.(sys_c).(trk).r_map)) + ant_mp.(sys_c).(trk).r_map;
+                                        rec.ant_mp.(sys_c).(short_trk).g_map  = Core_Utils.resize2(applied_map, size(ant_mp.(sys_c).(trk).g_map)) + ant_mp.(sys_c).(trk).g_map;
+                                        rec.ant_mp.(sys_c).(short_trk).c_map  = Core_Utils.resize2(applied_map, size(ant_mp.(sys_c).(trk).c_map)) + ant_mp.(sys_c).(trk).c_map;
+                                        rec.ant_mp.(sys_c).(short_trk).g1_map = Core_Utils.resize2(applied_map, size(ant_mp.(sys_c).(trk).g1_map)) + ant_mp.(sys_c).(trk).g1_map;
+                                        rec.ant_mp.(sys_c).(short_trk).c1_map = Core_Utils.resize2(applied_map, size(ant_mp.(sys_c).(trk).c1_map)) + ant_mp.(sys_c).(trk).c1_map;
                                     end
                                 end
                             end
@@ -699,7 +720,7 @@ classdef GNSS_Station < handle
             % Export the current value of the coordinate to a text coordinate file
             % One file per receiver, containing: time_stamp: 
             %   X, Y, Z, 
-            %   Cxx, Cyy, Czz, Cxy, Cxz, Cyz (not yet implemented)
+            %   Cxx, Cyy, Czz, Cxy, Cxz, Cyz
             %   n_epochs, n_obs
             %
             % INPUT:
@@ -798,6 +819,7 @@ classdef GNSS_Station < handle
                         str_tmp = sprintf('%s+SensorType     : GNSS\n', str_tmp);
                         str_tmp = sprintf('%s+SensorName     : GNSS\n', str_tmp);
                         str_tmp = sprintf('%s+DataScale      : m\n', str_tmp);
+                        str_tmp = sprintf('%s+DataScale Cov  : mm^2\n', str_tmp);
                         str_tmp = sprintf('%s+DataType       :\n', str_tmp);
                         str_tmp = sprintf('%s -00            : timeStamp\n', str_tmp);
                         str_tmp = sprintf('%s -01            : exportTime\n', str_tmp);
@@ -832,7 +854,7 @@ classdef GNSS_Station < handle
                                 if isempty(coo.Cxx)
                                     cov = zeros(3,3);
                                 else
-                                    cov = coo.Cxx(:,:,i);
+                                    cov = coo.Cxx(:,:,i)*1e6;
                                 end
                                 str_tmp = sprintf('%s%s;%s;%.4f;%.4f;%.4f;%.4f;%.4f;%.4f;%.4f;%.4f;%.4f;%d;%d;%.2f\n', str_tmp, time, now_time.toString('yyyy-mm-dd HH:MM:SS'), ...
                                     xyz(1), xyz(2), xyz(3), ...
@@ -6783,29 +6805,31 @@ classdef GNSS_Station < handle
             %
             % SYNTAX
             %   sta_list.showBaselineENU(<baseline_ids = []>, <flag_add_coo>, <n_obs>)
-            
-            if flag_add_coo < 0
-                tmp_id = 1:numel(sta_list); % find valid
-            else
-                tmp_id = find(~sta_list.isEmptyOut_mr); % find valid
-            end
-            id2valid = nan(numel(sta_list), 1);
-            id2valid(tmp_id) = 1:numel(tmp_id);
-            if flag_add_coo >= 0
-                sta_list = sta_list(~sta_list.isEmptyOut_mr);
-            end
-            out_list = [sta_list.out];
             if nargin < 4 || isempty(n_obs) || isnan(n_obs)
                 n_obs = 0;
             end
             if nargin < 3
                 flag_add_coo = 0;
             end
+            if flag_add_coo < 0
+                tmp_id = 1:numel(sta_list); % find valid
+            else
+                tmp_id = find(~sta_list.isEmptyOut_mr); % find valid
+            end
+            
+            if flag_add_coo >= 0
+                sta_list = sta_list(~sta_list.isEmptyOut_mr);
+            end
+            out_list = [sta_list.out];
+            
+            id2valid = nan(numel(sta_list), 1);
+            id2valid(tmp_id) = 1:numel(tmp_id);
             if nargin < 2
                 baseline_ids = [ones(numel(out_list)-1,1) (2:numel(out_list))'];
             else
                 baseline_ids(:) = id2valid(baseline_ids(:));
             end
+            
             fh_list = out_list.showBaselineENU(baseline_ids, flag_add_coo, n_obs);
         end
         

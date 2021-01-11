@@ -1,4 +1,4 @@
-function [data, lid_ko, trend] = strongFilterStaticData(data, robustness_perc, n_sigma)
+function [data, lid_ko, trend, spline] = strongFilterStaticData(data, robustness_perc, n_sigma, spline_base)
 % Returns the data removing outliers (spikes)
 %
 % INPUT:
@@ -39,18 +39,74 @@ function [data, lid_ko, trend] = strongFilterStaticData(data, robustness_perc, n
 % 01100111 01101111 01000111 01010000 01010011
 %--------------------------------------------------------------------------
 
+if any(data(:,end))
     if nargin < 2
         robustness_perc = 0.8;
     end
     if nargin < 3
         n_sigma = 6;
     end
+    if nargin < 4 || numel(spline_base) ~= 2
+        spline_base = [28, 2.5];
+    end
+    flag_time = false;
+    idf = [];
+    if size(data,2) >= 2
+        if size(data,2) >= 3
+            data_var = data(:,3);
+        end
+        time = data(:,1);
+        rate = round(median(diff(time*86400)))/86400;
+        time_full = linspace(time(1), time(end), round((time(end) - time(1)) / rate + 1))';
+        [~, idf, idr] = intersect(round((time_full-rate/2)/rate), round((time-rate/2)/rate));
+        tmp = data(:,2);
+        data = nan(numel(time_full), 1);
+        if numel(idr) < numel(tmp)
+            Core.getLogger.addWarning('StrongFilter is loosing some observations out of sync');
+        end
+        data(idf) = tmp(idr);
+        flag_time = 1;
+    end
     [tmp, trend] = strongDeTrend(data, robustness_perc, 1-((1-robustness_perc)/2), n_sigma);
+    
+    if any(tmp) && flag_time && (numel(data(idf)) > 4)
+        if (numel(tmp(idf)) > 11)
+            if size(data,2) >= 3
+                spline = splinerMat(time, [data(idf) data_var], spline_base(1), 1e-6); % one month splines
+            else
+                spline = splinerMat(time, [data(idf) tmp(idf).^2], spline_base(1), 1e-6); % one month splines
+            end
+            tmp(idf) = tmp(idf) - spline + trend(idf);
+            spline = splinerMat(time, [data(idf) abs(tmp(idf))], spline_base(2), 1e-6); % one week splines
+            spline = splinerMat(time, [data(idf) abs(data(idf) - spline)], spline_base(2), 1e-6); % one week splines
+            spline = splinerMat(time, [data(idf) (data(idf) - spline).^2], spline_base(2), 1e-6); % one week splines
+            tmp = data(idf) - spline;
+        else
+            tmp = tmp(idf);
+            spline = trend(idf);
+        end
+    else
+        if flag_time
+            spline = trend(idf);
+        else
+            spline = trend;
+        end
+    end
+    if flag_time
+        data = data(idf);
+        trend = trend(idf);
+    end
     thr = n_sigma * strongStd(tmp, robustness_perc);
-
     lid_ko = abs(tmp) > thr;
     % figure; plot(data, 'Color', [0.5 0.5 0.5]);
     data(lid_ko) = nan;
     % hold on; plot(data, '.-b', 'LineWidth', 2)
     % plot(tmp,'g');
+else
+    % no data
+    data = data(:,end);
+    lid_ko = true(size(data));
+    trend = data;
+    spline = data;
+end
 end

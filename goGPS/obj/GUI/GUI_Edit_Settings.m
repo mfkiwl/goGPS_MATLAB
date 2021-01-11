@@ -406,10 +406,10 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                 set(win, 'CloseRequestFcn', @this.close);                
             end
             
-            
+            this.updateSessionFromState();
             this.updateRecList();
             this.is_gui_ready = true;
-                            
+            
             this.win.Visible = 'on';
             drawnow;
             
@@ -1356,13 +1356,13 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
             
             v_bx_freq.Heights = 0 * v_bx_freq.Heights + 20;
             
-            n_b_gps.ButtonSize(1) = 72;
-            n_b_glo.ButtonSize(1) = 72;
-            n_b_gal.ButtonSize(1) = 72;
-            n_b_qzs.ButtonSize(1) = 72;
-            n_b_bei.ButtonSize(1) = 72;
-            n_b_irn.ButtonSize(1) = 72;
-            n_b_sbs.ButtonSize(1) = 72;
+            n_b_gps.ButtonSize(1) = 85;
+            n_b_glo.ButtonSize(1) = 85;
+            n_b_gal.ButtonSize(1) = 85;
+            n_b_qzs.ButtonSize(1) = 85;
+            n_b_bei.ButtonSize(1) = 85;
+            n_b_irn.ButtonSize(1) = 85;
+            n_b_sbs.ButtonSize(1) = 85;
             
             this.check_boxes{end+1} = Core_UI.insertCheckBoxCC(n_b_gps, '(L1) L1', 'GPS_L1', @this.onCheckBoxCCChange, color_bg);
             this.check_boxes{end+1} = Core_UI.insertCheckBoxCC(n_b_gps, '(L2) L2', 'GPS_L2', @this.onCheckBoxCCChange, color_bg);
@@ -1387,9 +1387,12 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
             this.check_boxes{end+1} = Core_UI.insertCheckBoxCC(n_b_qzs, '(L6) L6', 'QZS_LEX6', @this.onCheckBoxCCChange, color_bg);
             
             
-            this.check_boxes{end+1} = Core_UI.insertCheckBoxCC(n_b_bei, '(L2) B1', 'BDS_B1', @this.onCheckBoxCCChange, color_bg);
-            this.check_boxes{end+1} = Core_UI.insertCheckBoxCC(n_b_bei, '(L7) B2', 'BDS_B2', @this.onCheckBoxCCChange, color_bg);
-            this.check_boxes{end+1} = Core_UI.insertCheckBoxCC(n_b_bei, '(L6) B3', 'BDS_B3', @this.onCheckBoxCCChange, color_bg);
+            this.check_boxes{end+1} = Core_UI.insertCheckBoxCC(n_b_bei, '(L2) B1',   'BDS_B1', @this.onCheckBoxCCChange, color_bg);
+            this.check_boxes{end+1} = Core_UI.insertCheckBoxCC(n_b_bei, '(L1) B1C',  'BDS_B1C', @this.onCheckBoxCCChange, color_bg);
+            this.check_boxes{end+1} = Core_UI.insertCheckBoxCC(n_b_bei, '(L5) B2a',  'BDS_B2a', @this.onCheckBoxCCChange, color_bg);
+            this.check_boxes{end+1} = Core_UI.insertCheckBoxCC(n_b_bei, '(L7) B2b',  'BDS_B2b', @this.onCheckBoxCCChange, color_bg);
+            this.check_boxes{end+1} = Core_UI.insertCheckBoxCC(n_b_bei, '(L8) B2ab', 'BDS_B2ab', @this.onCheckBoxCCChange, color_bg);
+            this.check_boxes{end+1} = Core_UI.insertCheckBoxCC(n_b_bei, '(L6) B3',   'BDS_B3', @this.onCheckBoxCCChange, color_bg);
             
             
             this.check_boxes{end+1} = Core_UI.insertCheckBoxCC(n_b_irn, '(L5) L5', 'IRN_L5', @this.onCheckBoxCCChange, color_bg);

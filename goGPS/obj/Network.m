@@ -47,8 +47,11 @@ classdef Network < handle
         
         common_time      % gps_time
         rec_time_indexes % indexes
-        coo              % [n_coo x n_rec x n_sol] receiver coordinates
-        coo_vcv          % [6 x n_rec x n_sol] receiver coordinates
+        coo              % [(n_rec x n_sol) x n_coo] receiver coordinate
+        rec_coo          % [(n_rec x n_sol)] receiver of the coordinates
+        time_coo         % [(n_rec x n_sol)] time of the coordinates
+        obs_id_coo       % [(n_rec x n_sol)] id of groupof coordinates defined in Encyclopedia
+        coo_vcv          % [(n_coo x n_rec x n_sol)x(n_coo x n_rec x n_sol) ] receiver coordinates vcv
         coo_rate         % rate of the coordinate solution in seconds
         clock            % [n_epoch x n_rec] reciever clock
         ztd              % [n_epoch x n_rec] reciever ZTD
@@ -94,6 +97,8 @@ classdef Network < handle
             this.common_time = [];
             this.rec_time_indexes = [];
             this.coo = [];
+            this.time_coo = [];
+            this.obs_id_coo = [];
             this.coo_vcv = [];
             this.coo_rate = [];
             this.clock = [];
@@ -114,11 +119,12 @@ classdef Network < handle
             %   id_ref : [1,n_rec]  receivers numeric index to be choosen as reference, their value mean will be set to zero
             %   coo_rate : rate of the solution
             %   free_net : process in free net mode
-            %   mp_tye   : apply multipath to baselines 
+            %   mp_type  : apply multipath to baselines 
             %
             % SYNATAX
             %    this. adjustNetwork(id_ref, <coo_rate>, <reduce_iono>)
             
+            log = Core.getLogger;
             state = Core.getState;
             if nargin < 3
                 coo_rate = [];
@@ -155,9 +161,9 @@ classdef Network < handle
             n_valid_rec = sum(~is_empty_recs);
             n_valid_ref = sum(~is_empty_recs(lid_ref));
             if n_valid_ref < numel(id_ref)
-                this.log.addError('One or more reference stations for Network solution are missing! Skipping NET');
+                log.addError('One or more reference stations for Network solution are missing! Skipping NET');
             elseif (n_valid_rec < 2)
-                this.log.addError('Not enough receivers (< 2), skipping network solution');
+                log.addError('Not enough receivers (< 2), skipping network solution');
             else
                 % if iono reduction is requested take off single frequency
                 % receiver
@@ -165,7 +171,7 @@ classdef Network < handle
                     r = 1;
                     while (r <= length(this.rec_list))
                         if ~this.rec_list(r).work.isMultiFreq
-                            this.log.addWarning(sprintf('Receiver %s is not multi frequency, removing it from network processing.',this.rec_list(r).getMarkerName4Ch));
+                            log.addWarning(sprintf('Receiver %s is not multi frequency, removing it from network processing.',this.rec_list(r).getMarkerName4Ch));
                             this.rec_list(r) = [];
                             id_ref(id_ref == r) = [];
                             id_ref(id_ref > r) = id_ref(id_ref > r) -1;
@@ -197,7 +203,7 @@ classdef Network < handle
                 if state.getReweightNET() < 2
                     n_clean = 0;
                 else
-                    this.log.addMessage(this.log.indent('Network solution performing 4 loops of outlier detection on the residuals'), 2);
+                    log.addMessage(this.log.indent('Network solution performing 4 loops of outlier detection on the residuals'), 2);
                     n_clean = 3;
                 end
                 
@@ -226,6 +232,11 @@ classdef Network < handle
                         parametrization.rec_x(1) = state.tparam_coo_net;
                         parametrization.rec_y(1) = state.tparam_coo_net;
                         parametrization.rec_z(1) = state.tparam_coo_net;
+                        
+                        parametrization.rec_x_opt.spline_rate = state.rate_coo_net;
+                        parametrization.rec_y_opt.spline_rate = state.rate_coo_net;
+                        parametrization.rec_z_opt.spline_rate = state.rate_coo_net;
+                        
                         
                         % tracking parametrization
                         parametrization.rec_x(4) = state.fparam_coo_net;
@@ -397,7 +408,7 @@ classdef Network < handle
                     end
                     
                     % If is a baseline and MP reduction is requested,
-                    % reduce for MP
+                    % reduce for MP (multipath)
                     if (mp_type > 0)
                         % if baseline processing apply the map of the non reference twice
                         if (numel(this.rec_list) == 2) && (numel(this.id_ref) == 1)
@@ -522,12 +533,17 @@ classdef Network < handle
                     ls.solve(false);
                     ls.simpleSnoop();
                     % ls.snoopGatt(Core.getState.getMaxPhaseErrThr, Core.getState.getMaxCodeErrThr);
-                    ls.solve(Core.getState.net_amb_fix_approach >1);
-                    
                     s0 = mean(abs(ls.res(ls.phase_obs > 0 & ~ls.outlier_obs)));
+                    if s0 < 0.1 % if the solution is already very bad don't try fixing
+                        ls.solve(Core.getState.net_amb_fix_approach >1);
+                        s0 = mean(abs(ls.res(ls.phase_obs > 0 & ~ls.outlier_obs)));
+                    end
                     
-                    if (s0 < 0.015 || (flag_try == 1 && s0 < 0.05))
-                        this.log.addStatusOk(sprintf('Network adjustment completed with sigma0 = %.4f m ', s0));
+                    if (s0 < 0.015 || (flag_try == 1 && s0 < 0.25))
+                        if ~log.isScreenOut
+                            fprintf('    %s            Sigma0 = %.4f m \n', GPS_Time.now.toString('yyyy-mm-dd HH:MM:SS'), s0);
+                        end
+                        log.addStatusOk(sprintf('Network adjustment completed with sigma0 = %.4f m ', s0));
                         % initialize array for results
                         this.initOutNew(ls);
                         this.addAdjValuesNew(ls);
@@ -537,10 +553,16 @@ classdef Network < handle
                         flag_try = 0;
                     else
                         if state.isSepCooAtBoundaries && flag_try > 1
-                            this.log.addError(sprintf('s0 ( %.4f) too high! try to repeat the solution with separate coordinates',s0));
+                            if ~log.isScreenOut
+                                fprintf('    %s            Too high sigma0 = %.4f m \n', GPS_Time.now.toString('yyyy-mm-dd HH:MM:SS'), s0);
+                            end
+                            log.addError(sprintf('s0 ( %.4f) too high! try to repeat the solution with separate coordinates',s0));
                             flag_try = flag_try - 1;
                         else
-                            this.log.addWarning(sprintf('s0 ( %.4f) too high! not updating the results',s0));
+                            if ~log.isScreenOut
+                                fprintf('    %s            Too high sigma0 = %.4f m \n', GPS_Time.now.toString('yyyy-mm-dd HH:MM:SS'), s0);
+                            end
+                            log.addWarning(sprintf('s0 ( %.4f) too high! not updating the results',s0));
                             flag_try = 0;
                         end
                     end
@@ -575,7 +597,7 @@ classdef Network < handle
             end
             this.clock = zeros(n_time, n_rec);
             this.coo = nan(n_rec, 3, n_set_coo);
-            this.coo_vcv = nan(n_rec, 6, n_set_coo);
+            this.coo_vcv = zeros(n_rec, 6, n_set_coo);
             this.ztd = nan(n_time, n_rec);
             this.ztd_gn = nan(n_time, n_rec);
             this.ztd_ge = nan(n_time, n_rec);
@@ -586,9 +608,75 @@ classdef Network < handle
             state = Core.getState;
             n_rec = length(this.rec_list);
             % --- fill the correction values in the network
-            rec_vcv = ls.rec_par([find(ls.class_par == ls.PAR_REC_X); find(ls.class_par == ls.PAR_REC_Y); find(ls.class_par == ls.PAR_REC_Z)]);
-            rec_vcv(ismember(rec_vcv, this.id_ref)) = [];
-
+            %             rec_vcv = ls.rec_par([find(ls.class_par == ls.PAR_REC_X); find(ls.class_par == ls.PAR_REC_Y); find(ls.class_par == ls.PAR_REC_Z)]);
+            %             rec_vcv(ismember(rec_vcv, this.id_ref)) = [];
+            
+            
+            [~, int_lim] = state.getSessionLimits();
+            
+            if sum(ls.class_par == ls.PAR_REC_X ) >0 % coordiantes are always zero on first receiver
+                coo_vcv = [];
+                if Core.getState.isSepCooAtBoundaries
+                    % Push coordinates from LS object to rec
+                    idx_x = ls.class_par == ls.PAR_REC_X;
+                    if sum(idx_x) > 0
+                        x_coo = ls.x(idx_x);
+                        [x_coo_time1, x_coo_time2] = ls.getTimePar(idx_x);
+                        idx_save = x_coo_time1 - int_lim.first > -5e-2 & x_coo_time2 - int_lim.last < 5e-2;
+                        idx_x(idx_x) = idx_save;
+                    end
+                    
+                    idx_y = ls.class_par == ls.PAR_REC_Y;
+                    if sum(idx_y) > 0
+                        y_coo = ls.x(idx_y);
+                        [y_coo_time1, y_coo_time2] = ls.getTimePar(idx_y);
+                        idx_save = y_coo_time1 - int_lim.first > -5e-2 & y_coo_time2 - int_lim.last < 5e-2;
+                        idx_y(idx_y) = idx_save;                  
+                    end
+                    
+                    idx_z = ls.class_par == ls.PAR_REC_Z;
+                    if sum(idx_z) > 0
+                        z_coo = ls.x(idx_z);
+                        [z_coo_time1, z_coo_time2] = ls.getTimePar(idx_z);
+                        idx_save = z_coo_time1 - int_lim.first > -5e-2 & z_coo_time2 - int_lim.last < 5e-2;
+                        idx_z(idx_z) = idx_save;
+                    end
+                else
+                    idx_x = ls.class_par == ls.PAR_REC_X;
+                    idx_y = ls.class_par == ls.PAR_REC_Y;
+                    idx_z = ls.class_par == ls.PAR_REC_Z;
+                end
+                
+                
+                this.coo = [ls.x(idx_x) ls.x(idx_y) ls.x(idx_z)];
+                this.rec_coo = ls.rec_par(idx_x);       
+                this.time_coo = ls.getTimePar(idx_x);   
+                time_dt = (ls.time_par(idx_x,2) - ls.time_par(idx_x,1))/2;
+                time_dt(ls.time_par(idx_x,2) == 0) = 0;
+                this.time_coo.addSeconds(double(time_dt));
+                obs_id_coo_tmp = ls.obs_codes_id_par(idx_x);
+                this.obs_id_coo = zeros(size(obs_id_coo_tmp));
+                u_o_id = unique(obs_id_coo_tmp);
+                ency = Core.getEncyclopedia();
+                for j = 1 :length(u_o_id)
+                    id = ency.getObsGroupId(ls.unique_obs_codes{-u_o_id(j)});
+                    this.obs_id_coo(obs_id_coo_tmp == u_o_id(j)) = id;
+                end
+            else
+                this.coo = nan2zero(this.coo);
+            end
+            if Core.getState.isSepCooAtBoundaries
+                idx_x = ls.class_par == ls.PAR_REC_X;
+                if sum(idx_x) > 0                    
+                    [x_coo_time1, x_coo_time2] = ls.getTimePar(idx_x);
+                    idx_x = x_coo_time1 - int_lim.first > -5e-2 & x_coo_time2 - int_lim.last < 5e-2;
+                else
+                    idx_x = [];
+                end
+                this.coo_vcv = ls.coo_vcv([idx_x; idx_x; idx_x],[idx_x; idx_x; idx_x]);
+            else
+                this.coo_vcv = ls.coo_vcv;
+            end
             for i = 1 : n_rec
                 % if all value in the receiver are set to nan initilaize them to zero
                 if sum(isnan(this.rec_list(i).work.ztd)) == length(this.rec_list(i).work.ztd)
@@ -598,66 +686,6 @@ classdef Network < handle
                 end
                 % for all paramter take the apriori in the receiver and sum the netwrok estimated correction
                 idx_rec = ls.rec_par == i;
-                [~, int_lim] = state.getSessionLimits();
-                
-                if i > 0 & sum(ls.class_par == ls.PAR_REC_X ) >0 % coordiantes are always zero on first receiver
-                    coo_vcv = [];
-                    if Core.getState.isSepCooAtBoundaries
-                        % Push coordinates from LS object to rec
-                        idx_x = ls.class_par == ls.PAR_REC_X & idx_rec;
-                        if sum(idx_x) > 0
-                            x_coo = ls.x(idx_x);
-                            [x_coo_time1, x_coo_time2] = ls.getTimePar(idx_x);
-                            idx_save = x_coo_time1 - int_lim.first > -5e-2 & x_coo_time2 - int_lim.last < 5e-2;
-                            cox = mean(x_coo(idx_save));
-                        else
-                            cox = 0;
-                        end
-                        
-                        idx_y = ls.class_par == ls.PAR_REC_Y & idx_rec;
-                        if sum(idx_y) > 0
-                            y_coo = ls.x(idx_y);
-                            [y_coo_time1, y_coo_time2] = ls.getTimePar(idx_y);
-                            idx_save = y_coo_time1 - int_lim.first > -5e-2 & y_coo_time2 - int_lim.last < 5e-2;
-                            coy = mean(y_coo(idx_save));
-                        end
-                        
-                        idx_z = ls.class_par == ls.PAR_REC_Z & idx_rec;
-                        if sum(idx_z) > 0
-                            z_coo = ls.x(idx_z);
-                            [z_coo_time1, z_coo_time2] = ls.getTimePar(idx_z);
-                            idx_save = z_coo_time1 - int_lim.first > -5e-2 & z_coo_time2 - int_lim.last < 5e-2;
-                            coz = mean(z_coo(idx_save));
-                            
-                        else
-                            coz = 0;
-                        end
-                        
-                        coo = [cox coy coz];
-                    else
-                        if ~ismember(i, this.id_ref) && false
-                            coo_vcv = ls.coo_vcv(rec_vcv == i,rec_vcv == i);
-                            if ~isempty(coo_vcv)
-                                coo_vcv = [coo_vcv(1,1) (coo_vcv(1,2) + coo_vcv(2,1))/2  (coo_vcv(1,3) + coo_vcv(3,1))/2 coo_vcv(2,2) (coo_vcv(2,3) + coo_vcv(3,2))/2 coo_vcv(3,3)];
-                            else
-                                coo_vcv = zeros(1,6);
-                            end
-                        end
-                        coo = nan2zero([mean(ls.x( ls.class_par == ls.PAR_REC_X & idx_rec)) mean(ls.x(ls.class_par == ls.PAR_REC_Y & idx_rec)) mean(ls.x(ls.class_par == ls.PAR_REC_Z & idx_rec))]);
-                    end
-                    
-                    if isempty(coo)
-                        coo = [ 0 0 0];
-                    end
-                    
-                    this.coo(i,1:size(coo,2)) = nan2zero(this.coo(i,1:size(coo,2))) + coo;
-                    if ~isempty(coo_vcv)
-                        this.coo_vcv(i,:) = coo_vcv;
-                    end
-                    
-                else
-                    this.coo(i,:) = nan2zero(this.coo(i,:));
-                end
                 idx_clk = ls.class_par == LS_Manipulator_new.PAR_REC_CLK & idx_rec;
                 clk = ls.x(idx_clk);
                 time_clk = ls.time_par(idx_clk);
@@ -750,13 +778,6 @@ classdef Network < handle
                 % it is the paramter itself  the mean of the reference paramter
                 % it is in matrix form so it can be used in the future for variance covariance matrix of the coordinates
                 
-                % Applying the S transform I obtain the corrections with respect to the reference
-                for i = 1 : size(this.coo,3)
-                    this.coo(:,1,i) = S * this.coo(:,1,i);
-                    this.coo(:,2,i) = S * this.coo(:,2,i);
-                    this.coo(:,3,i) = S * this.coo(:,3,i);
-                end
-                
                 state = Core.getState;
                 % apply the S transform to the epochwise parameters
                 for i = 1 : n_time
@@ -784,6 +805,28 @@ classdef Network < handle
                         end
                     end
                 end
+                
+                 % Build S tranform fro the coordinates
+                time_coo = round(this.time_coo.getNominalTime(1).getRefTime);
+                S = zeros(length(time_coo));
+                u_time = unique(time_coo);
+                for t = u_time'
+                    idx_time = time_coo == t;
+                    idx_time_ref = idx_time;
+                    for j = 1 : length(id_ref)
+                        idx_time_ref = idx_time & this.rec_coo == id_ref(j);
+                        S(idx_time,idx_time_ref) = - 1 / numel(id_ref);
+                        S(idx_time,idx_time) = S(idx_time,idx_time) + eye(sum(idx_time));
+                    end
+                end
+                for i = 1 : size(this.coo,3)
+                    this.coo(:,1) = S * this.coo(:,1);
+                    this.coo(:,2) = S * this.coo(:,2);
+                    this.coo(:,3) = S * this.coo(:,3);
+                end
+                Svcv = [S zeros(size(S)) zeros(size(S)); zeros(size(S))  S zeros(size(S)); zeros(size(S))  zeros(size(S)) S];
+                this.coo_vcv = Svcv*this.coo_vcv*Svcv';
+                
             end
         end
         
@@ -800,32 +843,33 @@ classdef Network < handle
                 end
                 % for all paramter take the apriori in the receiver and sum the netwrok estimated correction
                 n_coo_set = size(this.coo,3);
-                this.coo(i,:,:) = this.coo(i,:,:) + repmat(this.rec_list(i).work.xyz,1,1,n_coo_set);
+                idx_rec = this.rec_coo == i;
+                this.coo(idx_rec,:) = this.coo(idx_rec,:) + repmat(this.rec_list(i).work.xyz,sum(idx_rec),1);
                 %
                 [idx_is, idx_pos] = ismembertol(this.rec_list(i).work.getTime.getGpsTime(), this.common_time.getGpsTime, 0.002, 'DataScale', 1);
                 idx_pos = idx_pos(idx_pos > 0);
                 if ~isempty(idx_pos)
-                clk_rec = this.rec_list(i).work.getDt();
-                this.clock(idx_pos,i) = this.clock(idx_pos,i) + clk_rec(idx_is);
-                
-                if state.flag_ztd_net
-                    ztd_rec = this.rec_list(i).work.getZtd();
-                    ztd_rec_apr = this.rec_list(i).work.getZwd() + this.rec_list(i).work.getAprZhd();
-                    ztd_rec(ztd_rec == 0) = ztd_rec_apr(ztd_rec == 0);
-                    this.ztd(idx_pos,i) = this.ztd(idx_pos,i) + ztd_rec(idx_is);
-                end
-                
-                if state.flag_grad_net
-                    [gn_rec, ge_rec] = this.rec_list(i).work.getGradient();
+                    clk_rec = this.rec_list(i).work.getDt();
+                    this.clock(idx_pos,i) = this.clock(idx_pos,i) + clk_rec(idx_is);
                     
-                    this.ztd_gn(idx_pos,i) = this.ztd_gn(idx_pos,i) + gn_rec(idx_is);
+                    if state.flag_ztd_net
+                        ztd_rec = this.rec_list(i).work.getZtd();
+                        ztd_rec_apr = this.rec_list(i).work.getZwd() + this.rec_list(i).work.getAprZhd();
+                        ztd_rec(ztd_rec == 0) = ztd_rec_apr(ztd_rec == 0);
+                        this.ztd(idx_pos,i) = this.ztd(idx_pos,i) + ztd_rec(idx_is);
+                    end
                     
-                    this.ztd_ge(idx_pos,i) = this.ztd_ge(idx_pos,i) + ge_rec(idx_is);
-                end
+                    if state.flag_grad_net
+                        [gn_rec, ge_rec] = this.rec_list(i).work.getGradient();
+                        
+                        this.ztd_gn(idx_pos,i) = this.ztd_gn(idx_pos,i) + gn_rec(idx_is);
+                        
+                        this.ztd_ge(idx_pos,i) = this.ztd_ge(idx_pos,i) + ge_rec(idx_is);
+                    end
                 end
             end
         end
-                        
+        
         function pushBackInReceiver(this, ls)
             % Save in work the results computed by the network object
             %
@@ -846,9 +890,34 @@ classdef Network < handle
             state = Core.getState;
             % --- push back the results in the receivers
             for i = 1 : n_rec
+                s0 = mean(abs(ls.res(ls.phase_obs > 0 & ~ls.outlier_obs)));
+                idx_obs = ls.receiver_obs == i & ~ls.outlier_obs;
                 if sum(ls.param_class == ls.PAR_REC_X | ls.param_class == ls.PAR_REC_Y  | ls.param_class == ls.PAR_REC_Z )>0
-                    this.rec_list(i).work.xyz = this.coo(i,:);
-                    this.rec_list(i).work.xyz_vcv = this.coo_vcv(i,:);
+                    idx_rec = find(this.rec_coo == i);
+                    this.rec_list(i).work.xyz = mean(this.coo(idx_rec,:),1);
+                    % generate a coordinates object and add it to receiver
+                    n_coo = size(this.coo(idx_rec,:),1);
+                    coo = Coordinates.fromXYZ(this.coo(idx_rec,:));
+                    coo.Cxx = zeros(3,3,length(idx_rec));
+                    for j = 1 : length(idx_rec)
+                        idx_coo = [idx_rec(j) size(this.coo,1)+idx_rec(j) 2*size(this.coo,1)+idx_rec(j)];
+                        coo.Cxx(:,:,j) = this.coo_vcv(idx_coo,idx_coo);
+                    end
+                    rate = state.getRateNet;
+                    if rate == 0
+                        rate = state.getSessionDuration;
+                    end
+                    coo.time = this.time_coo.getEpoch(idx_rec);
+                    coo.time.addIntSeconds(round(rate/2));
+                    coo.time = coo.time.getNominalTime(rate);
+                    coo.time.addIntSeconds(-round(rate/2));
+                    coo.info.obs_used = ones(n_coo,1) .* this.obs_id_coo(idx_rec);
+                    coo.info.n_epo = ones(n_coo,1) .* length(unique(ls.time_par(ls.rec_par == i & ~ls.out_par)));
+                    coo.info.n_obs = ones(n_coo,1) .* sum(idx_obs);
+                    coo.info.s0 = ones(n_coo,1) .* s0;
+                    coo.info.flag = zeros(n_coo,1);
+                    coo.info.fixing_ratio = ones(n_coo,1) .* ls.fix_ratio;
+                    this.rec_list(i).work.coo = coo;
                 end
                 idx_res_av = ~isnan(this.clock(:, i));
                 [idx_is, idx_pos] = ismembertol(this.common_time.getEpoch(idx_res_av).getGpsTime(), this.rec_list(i).work.time.getGpsTime, 0.002, 'DataScale', 1);
@@ -867,43 +936,14 @@ classdef Network < handle
                     ge = this.ztd_ge(idx_res_av, i);
                     this.rec_list(i).work.tge(idx_pos) = ge(idx_is);
                 end
-                s0 = mean(abs(ls.res(ls.phase_obs > 0 & ~ls.outlier_obs)));
                 % sigma of the session
                 this.rec_list(i).work.quality_info.s0 = s0;
                 this.rec_list(i).work.quality_info.n_epochs = length(unique(ls.time_par(ls.rec_par == i & ~ls.out_par)));
-                idx_obs = ls.receiver_obs == i & ~ls.outlier_obs;
                 this.rec_list(i).work.quality_info.n_obs = sum(idx_obs);
                 this.rec_list(i).work.quality_info.n_sat = length(unique(ls.satellite_obs(idx_obs)));
                 this.rec_list(i).work.quality_info.n_sat_max = max(hist(unique(ls.time_obs.getEpoch(idx_obs).getNominalTime(ls.obs_rate).getRefTime(ls.time_obs.minimum.getMatlabTime) * 1000 + double(ls.satellite_obs(idx_obs))), this.rec_list(i).work.quality_info.n_epochs ));
                 this.rec_list(i).work.quality_info.fixing_ratio = ls.fix_ratio; %TBD
                 
-                % residual
-                % idx_rec = find( ls.receiver_obs == i);
-                % %                 % save phase residuals
-                % idx_ph = find(this.rec_list(i).work.obs_code(:,1) == 'L');
-                % this.rec_list(i).work.sat.res_ph_by_ph = nan(this.rec_list(i).work.time.length, length(idx_ph));
-                % for j = 1 : length(idx_ph)
-                %     ip = idx_ph(j);
-                %     id_code = Core_Utils.findAinB({[this.rec_list(i).work.system(ip) this.rec_list(i).work.obs_code(ip,:)]}, ls.unique_obs_codes);
-                %     idx_res = idx_rec(ls.obs_codes_id_obs(idx_rec) == id_code & ls.satellite_obs(idx_rec) == this.rec_list(i).work.go_id(ip));
-                %     if any(idx_res)
-                % 
-                %         [~,idx_time] = ismember(ls.ref_time_obs(idx_res),this.rec_list(i).work.time.getNominalTime.getRefTime(ls.time_min.getMatlabTime));     
-                %         this.rec_list(i).work.sat.res_ph_by_ph(idx_time,j) = ls.res(idx_res);
-                %     end
-                % end
-                % % save phase residuals
-                % idx_pr = find(this.rec_list(i).work.obs_code(:,1) == 'C');
-                % this.rec_list(i).work.sat.res_pr_by_pr = nan(this.rec_list(i).work.time.length, length(idx_ph));
-                % for j = 1 : length(idx_pr)
-                %     ip = idx_pr(j);
-                %     id_code = Core_Utils.findAinB({[this.rec_list(i).work.system(ip) this.rec_list(i).work.obs_code(ip,:)]}, ls.unique_obs_codes);
-                %     idx_res = idx_rec(ls.obs_codes_id_obs(idx_rec) == id_code & ls.satellite_obs(idx_rec) == this.rec_list(i).work.go_id(ip));
-                %     if any(idx_res)
-                %         [~,idx_time] = ismember(ls.ref_time_obs(idx_res),this.rec_list(i).work.time.getNominalTime.getRefTime(ls.time_min.getMatlabTime));
-                %         this.rec_list(i).work.sat.res_pr_by_pr(idx_time,j) = ls.res(idx_res);
-                %     end
-                % end
                 % push back electronic bias
                 if sum(ls.class_par == LS_Manipulator_new.PAR_REC_EB) > 0
                     idx_eb = find(ls.class_par == LS_Manipulator_new.PAR_REC_EB & ls.rec_par == i);

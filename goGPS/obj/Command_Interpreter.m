@@ -117,6 +117,7 @@ classdef Command_Interpreter < handle
         PAR_OFFSET      % Parameter select offset
         PAR_SNRTHR      % Parameter select snrthr
         PAR_SS          % Parameter select constellation
+        PAR_P_GRP         % Parameter constellation grouping (for MPM generation)
         PAR_OTYPE       % Parameter select observation type (i.e. CPLSD)
         PAR_BAND        % Parameter of the band to be used in the adjustment
         PAR_CTYPE       % Parameter coordinate type
@@ -385,6 +386,13 @@ classdef Command_Interpreter < handle
             this.PAR_P_MPN.limits = [];
             this.PAR_P_MPN.accepted_values = [];
 
+            this.PAR_P_GRP.name = 'constellation grouping';
+            this.PAR_P_GRP.descr = '-g=<group_list>    Group List (e.g. -s=GRE,EG,RG)';
+            this.PAR_P_GRP.par = '(\-g\=)'; % (regexp) parameter prefix: -s --constellation
+            this.PAR_P_GRP.class = 'char';
+            this.PAR_P_GRP.limits = [];
+            this.PAR_P_GRP.accepted_values = [];
+            
             this.PAR_M_UNCOMBINED.name = 'Use the uncombined engine';
             this.PAR_M_UNCOMBINED.descr = '-u                 (flag) use the uncombined engine';
             this.PAR_M_UNCOMBINED.par = '(-u)|(-U)|(--uncombined)|(--UNCOMBINED)';
@@ -988,7 +996,7 @@ classdef Command_Interpreter < handle
             this.CMD_MPEST.name = {'MPEST', 'multipath_est'};
             this.CMD_MPEST.descr = ['Create a multipath model for the receiver.' new_line 'It requires to previously process the target with the uncombined engine.' new_line 'Uncombined residuals must be in the receiver'];
             this.CMD_MPEST.rec = 'T';
-            this.CMD_MPEST.par = [this.PAR_N_DAYS this.PAR_OFFSET this.PAR_P_MPN];
+            this.CMD_MPEST.par = [this.PAR_N_DAYS this.PAR_OFFSET this.PAR_P_MPN this.PAR_P_GRP];
 
             this.CMD_KEEP.name = {'KEEP'};
             this.CMD_KEEP.descr = ['Keep in the object the data of a certain constallation' new_line 'at a certain rate'];
@@ -1075,7 +1083,7 @@ classdef Command_Interpreter < handle
             this.KEY_PAR.name = {'PAR', 'par'};
             this.KEY_PAR.descr = ['Parallel section start (run on targets)' new_line 'use T$ as target in this section'];
             this.KEY_PAR.rec = '';
-            this.KEY_PAR.key = 'STP';
+            this.KEY_PAR.key = 'STPWO';
             this.KEY_PAR.par = [];
 
             this.KEY_END.name = {'END', 'end', 'ENDFOR', 'END_FOR', 'end_for', 'ENDPAR', 'END_PAR', 'end_par'};
@@ -1289,6 +1297,7 @@ classdef Command_Interpreter < handle
                 level = execution_block + loop_level_add;
                 % for each command
                 cur_line_id = 0;
+                cmd_list = cmd_list(~err_list); % keep only valid commandsto execute
                 while cur_line_id < numel(cmd_list)
                     cur_line_id = cur_line_id + 1;
                     
@@ -2435,6 +2444,7 @@ classdef Command_Interpreter < handle
             [n_days, found_n] = this.getNumericPar(tok, this.PAR_N_DAYS.par);
             [offset, found_o] = this.getNumericPar(tok, this.PAR_OFFSET.par);
             [mp_type] = this.getMatchingMP(tok);
+            [sys_grp, found_g] = this.getSysGrouping(tok);
             log = Core.getLogger;
             if ~found
                 log.addWarning('No target found -> nothing to do');
@@ -2451,9 +2461,9 @@ classdef Command_Interpreter < handle
                         else
                             day_span = [n_days];
                         end
-                        rec(r).updateMultiPath(day_span, mp_type);
+                        rec(r).updateMultiPath(day_span, mp_type, sys_grp);
                     else
-                        rec(r).updateMultiPath([], mp_type);
+                        rec(r).updateMultiPath([], mp_type, sys_grp);
                     end                    
                 end
             end
@@ -3396,6 +3406,36 @@ classdef Command_Interpreter < handle
             end
         end
         
+        function [sys_grp, found] = getSysGrouping(this, tok)
+            % Extract from a set of tokens the constellation grouping
+            % This is useful for MPEST command, in the estimation of multipath maps
+            % multiple constellations can be used together exploiting close bands with similar
+            % reflection features
+            %
+            % INPUT
+            %   tok     list of tokens(parameters) from command line (cell array)
+            %
+            % OUTPUT
+            %   sys_grp struct witha field for each constellation
+            %
+            % SYNTAX
+            %   [sys_grp, found] = this.getSysGrouping(tok)
+            
+            found = false;            
+            sys_grp = struct('G', 'G', 'R', 'R', 'E', 'E', 'J', 'J', 'C', 'C', 'I', 'I', 'S', 'S');
+            
+            tmp = regexp([tok{:}], ['(?<=' this.PAR_P_GRP.par ')[GREJCIS,]*'], 'match', 'once');
+            if ~isempty(tmp)
+                tmp = textscan(tmp, '%s', 'Delimiter', ','); tmp = tmp{1};
+                found = true;
+                for g = 1 : numel(tmp)
+                    if numel(tmp{g}) > 1
+                        sys_grp.(tmp{g}(1)) = tmp{g};
+                    end
+                end
+            end
+        end
+        
         function [otype_list, found] = getObsType(this, tok)
             % Extract from a set of tokens the observation type parameter
             %
@@ -3442,32 +3482,38 @@ classdef Command_Interpreter < handle
                     id = id + 2;
                 end
             end
-            tok = regexp(str_cmd,'[^ ]*', 'match');
+            
             cmd = [];
             id = [];
-            if isempty(tok)
-                err = this.WRN_MPT; % no command found
+            if not(isempty(str_cmd)) && ismember(str_cmd(1), '%#')
+                    % is a comment
+                    err = 0;
             else
-                id = this.CMD_ID((strcmp(strrep(tok{1}, this.SUB_KEY, ' '), this.VALID_CMD)));
-                if isempty(id)
-                    err = this.ERR_UNK; % command unknown
+                tok = regexp(str_cmd,'[^ ]*', 'match');
+                if isempty(tok)
+                    err = this.WRN_MPT; % no command found
                 else
-                    if id > numel(this.CMD_LIST)
-                        cmd = this.(sprintf('KEY_%s', this.KEY_LIST{id - numel(this.CMD_LIST)}));
+                    id = this.CMD_ID((strcmp(strrep(tok{1}, this.SUB_KEY, ' '), this.VALID_CMD)));
+                    if isempty(id)
+                        err = this.ERR_UNK; % command unknown
                     else
-                        cmd = this.(sprintf('CMD_%s', this.CMD_LIST{id}));
-                    end
-                    if ~isfield(cmd, 'key')
-                        cmd.key = '';
-                    end
-                    flag_multiple_par = false;
-                    for p = 1 : numel(cmd.par)
-                        flag_multiple_par = flag_multiple_par || cmd.par(p).par(1) == '*';
-                    end
-                    if numel(tok) < (1 + numel(cmd.rec))
-                        err = this.ERR_NEI; % not enough input parameters
-                    elseif ~flag_multiple_par && (numel(tok) > (1 + numel(cmd.rec) + numel(cmd.par) + numel(cmd.key)) && ~strcmp(cmd.name{1}, 'RENAME'))
-                        err = this.WRN_TMI; % too many input parameters
+                        if id > numel(this.CMD_LIST)
+                            cmd = this.(sprintf('KEY_%s', this.KEY_LIST{id - numel(this.CMD_LIST)}));
+                        else
+                            cmd = this.(sprintf('CMD_%s', this.CMD_LIST{id}));
+                        end
+                        if ~isfield(cmd, 'key')
+                            cmd.key = '';
+                        end
+                        flag_multiple_par = false;
+                        for p = 1 : numel(cmd.par)
+                            flag_multiple_par = flag_multiple_par || cmd.par(p).par(1) == '*';
+                        end
+                        if numel(tok) < (1 + numel(cmd.rec))
+                            err = this.ERR_NEI; % not enough input parameters
+                        elseif ~flag_multiple_par && (numel(tok) > (1 + numel(cmd.rec) + numel(cmd.par) + numel(cmd.key)) && ~strcmp(cmd.name{1}, 'RENAME'))
+                            err = this.WRN_TMI; % too many input parameters
+                        end
                     end
                 end
             end
@@ -3517,7 +3563,7 @@ classdef Command_Interpreter < handle
             eb_counter = 0;
             for c = 1 : numel(cmd_list)
                 [cmd, err_list(c), ~, cmd_list{c}] = this.getCommandValidity(cmd_list{c});
-                if (nargout > 2)
+                if (nargout > 2) && not(isempty(cmd)) % if it is not a comment
                     if err_list(c) == 0 && (cmd.id == this.KEY_FOR.id)
                         % I need to loop
                         eb_counter = eb_counter + 1;
@@ -3591,6 +3637,9 @@ classdef Command_Interpreter < handle
                 if err_list(c) < 0 && err_list(c) > -100
                     log.addWarning(sprintf('%s - cmd %03d "%s"', this.STR_ERR{abs(err_list(c))}, c, cmd_list{c}));
                 end
+                if ~ismember(err_list(c), [this.WRN_MPT, 0])
+                    cmd_list{c} = sprintf('%% %s - CMD ERROR', cmd_list{c});
+                end
                 execution_block(c) = eb_counter;
                 if ~isempty(cmd)
                     flag_push_command = any(cell2mat(strfind(this.PUSH_LIST, cmd.name{1})));
@@ -3610,7 +3659,7 @@ classdef Command_Interpreter < handle
             end   
            
             flag_push = flag_push .* auto_push; % If in the command list PUSHOUT is present disable automatic push!
-            cmd_list = cmd_list(~err_list);
+            % cmd_list = cmd_list(~err_list); % errors are now commented
             execution_block = execution_block(~err_list);
             sss_list = sss_list(~err_list);
             session_lev = session_lev(~err_list);

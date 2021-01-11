@@ -1352,6 +1352,21 @@ classdef Core_Utils < handle
                 hold on;
             end
         end
+        
+        function [h,a] = plotconf(x, y, sy, color)
+            % plot data and confidence interval on top
+            %
+            % SYNTAX:
+            %  [h,a] = Core_Utils.plotconf(x,y,sy,color)
+            if not(isempty(y))
+                h = plot(x,y,'color',color,'LineWidth',2);
+                a = patch([x(:); flipud(x(:))],[y(:)-sy(:); flipud(y(:)+sy(:))],zeros(size([x(:); x(:)])),'FaceColor',color,'EdgeColor','none','FaceAlpha',0.2,'HandleVisibility','off');
+            else
+                h = [];
+                y = 0;
+                a = patch([x(:); flipud(x(:))],[y(:)-0*sy(:); flipud(y(:)+sy(:))],zeros(size([x(:); x(:)])),'FaceColor',color,'EdgeColor','none','FaceAlpha',0.2,'HandleVisibility','off');
+            end
+        end
 
         %--------------------------------------------------------------------------
         % SHOW FUNCTIONS
@@ -3234,7 +3249,7 @@ classdef Core_Utils < handle
             
             P_red = P(id_est_amb,keep_id);
             
-            x(id_est_amb) = P_red * (L_red' \((1./d_red).*(L_red\(P_red' *b(id_est_amb)))));
+            x(id_est_amb,:) = P_red * (L_red' \((1./d_red).*(L_red\(P_red' *b(id_est_amb,:)))));
         end
         
         function sys_list = getPrefSys(sys_list)

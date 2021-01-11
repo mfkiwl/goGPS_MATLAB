@@ -1,6 +1,6 @@
 function [y_splined, x_spline, s_weights, y_splined_ext] = splinerMat(x, y, dxs, reg_factor, x_ext)
 % SYNTAX:
-%   [y_splined, x_spline, s_weights y_splined_ext] = splinerMat(x, y, dxs, reg_factor, <x_ext>)
+%   [y_splined, x_spline, s_weights, y_splined_ext] = splinerMat(x, y, dxs, reg_factor, <x_ext>)
 %
 % EXAMPLE:
 %   [y_splined, x_spline, s_weights, y_splined_ext] = splinerMat(x, y, 4, 0, x_ext);
@@ -335,13 +335,19 @@ function [y_splined, x_spline, s_weights] = spliner_v51R(x, y, y_var, dxs, reg_f
     % find the interpolation for the last subset of observations
     s_par = [];
     if (size(N,2)>2)
-        fprintf('WARNING: Regularization is needed observations are less than splines.\n         Adding 1e-9 on the normal matrix diagonal\n');
+        if reg_factor == 0
+            fprintf('WARNING: Regularization is needed observations are less than splines.\n         Adding 1e-9 on the normal matrix diagonal\n');
+            reg_factor = 1e-9;
+        end
         R = sparse(eye(size(N,2))-diag(ones(size(N,2)-1,1),1)-diag(ones(size(N,2)-1,1),-1) + diag([0; ones(size(N,2)-2,1); 0]));
         R = R*reg_factor;
         s_par = (N+R)\TN;
     else
         if (used_obs < size(N,2))
-            fprintf('WARNING: Regularization is needed observations are less than splines.\n         Adding 1e-9 on the normal matrix diagonal\n');
+            if reg_factor == 0
+                fprintf('WARNING: Regularization is needed observations are less than splines.\n         Adding 1e-9 on the normal matrix diagonal\n');
+                reg_factor = 1e-9;
+            end
             R = sparse(eye(size(N,2))*reg_factor);
             s_par = (N+R)\TN;
         else

@@ -911,8 +911,6 @@ classdef Parallel_Manager < Com_Interface
                         
                         completed_job = [completed_job; job_id]; %#ok<AGROW>
                         worker_stack = [worker_stack {[worker_id '_']}]; %#ok<AGROW>
-                        
-                        
                     end
                     % check if executiong time has not passed max time
                     % (sometimes a parallel job die without notice)
