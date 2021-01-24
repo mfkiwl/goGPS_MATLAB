@@ -264,6 +264,9 @@ classdef Go_Slave < Com_Interface
                         log_path = fullfile(core.state.getComDir, 'log', sprintf('goGPS_slave_%s_run_%s_${NOW}.log', strrep(core.state.getPrjName, ' ', '_'), this.id));
                         log_path = strrep(log_path, '${NOW}', GPS_Time.now.toString('yyyymmdd_HHMMSS'));
                         core.log.setOutFile(log_path); % <= to enable project logging
+                        core.log.enableFileOut();
+                        this.log = core.log;
+                        this.log.addMarkedMessage('Logging to file');
                         
                         this.id = regexp(msg, [Go_Slave.SLAVE_READY_PREFIX iif(this.slave_type == 1, this.SLAVE_TARGET_PREFIX, this.SLAVE_SESSION_PREFIX) '[0-9]*'], 'match', 'once');
                         
@@ -291,6 +294,7 @@ classdef Go_Slave < Com_Interface
                         active_ps = true;
                         while active_ps
                             try
+                                core.log.enableFileOut();
                                 msg = this.checkMsg([this.id '_' Parallel_Manager.MSG_DO '*' Parallel_Manager.ID], true, true); % WAIT ACK MESSAGE
                                 if isnumeric(msg)
                                     active_ps = false;

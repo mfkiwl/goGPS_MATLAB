@@ -1611,11 +1611,11 @@ classdef Command_Interpreter < handle
                             tb = Telebot();
                             msg = strrep(tok{t}(2:end-1), this.SUB_KEY, ' ');
                             if any(msg == '$') % a key might be present
-                                msg = strrep(msg, '${PRJ_NAME}', Core.getState.getPrjName);
+                                msg = strrep(msg, '${PRJ_NAME}', ['<b>' Core.getState.getPrjName '</b>']);
                                 msg = strrep(msg, '${SSS_ID}', sprintf('%d/%d', Core.getCurrentSession, Core.getState.getSessionCount));
                                 msg = strrep(msg, '${SSS_INTERVAL}', sprintf('from %s to %s', Core.getState.getSessionLimits.first.toString('yyyy/mm/dd HH:MM'), Core.getState.getSessionLimits.last.toString('yyyy/mm/dd HH:MM')));
                             end
-                            tb.sendText(telebot_chat_id, msg, 'md');
+                            tb.sendText(telebot_chat_id, msg, 'html');
                         elseif ~isempty(telebot_chat_id)
                             log = Core.getLogger;
                             log.addError(sprintf('Telegram bot is available in the GReD version only\nI cannot send message "%s"', strrep(tok{t}(2:end-1), this.SUB_KEY, ' ')));
