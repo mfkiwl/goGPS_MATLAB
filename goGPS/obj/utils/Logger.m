@@ -66,6 +66,8 @@ classdef Logger < handle
         file_out_mode = 'w+';                     % log to file in (w/a) mode (w+ = new file, a+ = append)
         fid                                       % File handler
         win
+        
+        creation_time = GPS_Time(now);
     end
 
     methods (Access = private)
@@ -111,6 +113,20 @@ classdef Logger < handle
     %  MANAGING LOGGING
     % =========================================================================
     methods
+        function toString(this)
+            % Display on screen information about the Logger object
+            %
+            % INPUT
+            %   this    core object
+            %
+            % SYNTAX
+            %   this.toString();
+            fprintf('----------------------------------------------------------------------------------\n')
+            this.log.addMarkedMessage(sprintf('Logger object created at %s\n', this.creation_time.toString));
+            fprintf('----------------------------------------------------------------------------------\n')
+            this.log.newLine();
+        end
+        
         % Out status ------------------------------------------------------
         
         function is_active = isScreenOut(this)

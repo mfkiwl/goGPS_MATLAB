@@ -594,18 +594,20 @@ classdef Core < handle
             flag = isempty(core.state);
         end
         
-        function state = getCurrentSettings(ini_settings_file)
+        function [state, is_new] = getCurrentSettings(ini_settings_file)
             % Get the persistent settings
             %
             % SYNTAX
-            %   state = Core.getCurrentSettings(<ini_settings_file>)
+            %  [state, is_new] = Core.getCurrentSettings(<ini_settings_file>)
             
             if nargin == 1 && ~isempty(ini_settings_file)
                 core = Core.getInstance(false, true, ini_settings_file);
             else
                 core = Core.getInstance(false, true);
             end
+            is_new = false;
             if isempty(core.state)
+                is_new = true;
                 core.state = Prj_Settings();
             end
             % Return the handler to the object containing the current settings
@@ -1161,6 +1163,9 @@ classdef Core < handle
             % 
             % EXAMPLE
             %   core.exec({'LOAD T*', 'PREPRO T*', 'PPP T*'})
+            if isempty(this.cmd)
+                this.cmd = Command_Interpreter(this);
+            end
             this.cmd.exec(this, cmd_list);
         end                    
     end

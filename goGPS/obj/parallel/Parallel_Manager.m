@@ -267,7 +267,7 @@ classdef Parallel_Manager < Com_Interface
                 else
                     dos(run_cmd);
                 end
-                pause(0.5); % pause is necessary to avoid twin slaves (slaves with the same id)
+                pause(0.4); % pause is necessary to avoid twin slaves (slaves with the same id)
             end
             
             if ispc
@@ -468,6 +468,7 @@ classdef Parallel_Manager < Com_Interface
                 
                 % check for complete jobs
                 [active_jobs, completed_job, worker_stack] = this.waitCompletedJob(active_jobs, completed_job, worker_stack, worker2job, worker2jobstart, par_type);
+                this.log.addMarkedMessage(sprintf('%d of %d jobs completed @ %s', numel(completed_job), numel(list), GPS_Time.now.toString('yyyy-mm-dd HH:MM:SS')));
             end
             if isempty(worker_stack)
                 Core.getLogger.addError('All workers has been lost. Stopping parallel execution');
@@ -929,7 +930,7 @@ classdef Parallel_Manager < Com_Interface
                 end
                 
                 active_jobs = active_jobs - n_job_done;
-                this.log.addMarkedMessage(sprintf('%d jobs completed @ %s', numel(completed_job), GPS_Time.now.toString('yyyy-mm-dd HH:MM:SS')));
+                %this.log.addMarkedMessage(sprintf('%d jobs completed @ %s', numel(completed_job), GPS_Time.now.toString('yyyy-mm-dd HH:MM:SS')));
                 this.deleteMsg([Go_Slave.MSG_ACK, Go_Slave.SLAVE_READY_PREFIX '*'], true);
             end
         end
@@ -958,7 +959,11 @@ classdef Parallel_Manager < Com_Interface
             this.deleteMsg(Go_Slave.MSG_DIE, true);
             this.deleteMsg(Go_Slave.MSG_BORN, true);
             this.deleteMsg('*');
-            delete(fullfile(this.COM_DIR,'*.mat'));
+            delete(fullfile(this.COM_DIR, '*.mat'));
+            try % Delete logs if present
+                delete(fullfile(this.COM_DIR, 'log', '*.log'));
+            catch
+            end
         end
         
         function resurgit(this, n_workers, verbosity)

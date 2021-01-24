@@ -94,9 +94,7 @@ classdef GPS_Time < Exportable & handle
         REF_TIME = 2;       % time_type value for times stored in time_ref: (double) origin of the "time system" expressed in datenum format + (double array) difference in seconds w.r.t. time_ref
     end
     
-    properties (SetAccess = private, GetAccess = public)
-        log = Logger.getInstance(); % Handler to the log object
-        
+    properties (SetAccess = private, GetAccess = public)        
         time_type = 0;      % flag depending on its value different representation of time are possible
         
         % time_type == 0 MATLAB_TIME DEFAULT it supports up to ~0.1 ms precision
@@ -475,7 +473,7 @@ classdef GPS_Time < Exportable & handle
                         case 3 % GPS_Time_Week_Dow (to unix time)
                             this.GPS_Time_Week_Dow(arg1, arg2);
                         otherwise
-                            this.log.addError('Unrecognized time format!!!');
+                            Logger.getInstance.addError('Unrecognized time format!!!');
                     end
             end
             %this.computeLeapSeconds();
@@ -538,7 +536,7 @@ classdef GPS_Time < Exportable & handle
                         case 2 % GPS_Time.REF_TIME
                             this.appendRefTime(arg1, arg2, arg3);
                         otherwise
-                            this.log.addError('Unrecognized time format!!!');
+                            Logger.getInstance.addError('Unrecognized time format!!!');
                     end
             end
             %this.computeLeapSeconds();
@@ -575,6 +573,26 @@ classdef GPS_Time < Exportable & handle
             %   copy = getCopy(this)
             copy = GPS_Time();
             copy.copyFrom(this);
+        end
+        
+        function id_sort = sort(this)
+            % Return the ids used to sort the time
+            % Internally sort the time in ascending way
+            %
+            % SYNTAX
+            %   id_sort = sort(this);
+            
+            [~, id_sort] = sort(this.getMatlabTime);
+            switch this.time_type
+                case 0 % I'm in MAT TIME
+                    this.mat_time = this.mat_time(id_sort);
+                case 1 % I'm in UNIX TIME
+                    this.unix_time = this.unix_time(id_sort);
+                    this.unix_time_f = this.unix_time_f(id_sort);
+                    
+                case 2 % I'm in REF TIME
+                    this.time_diff = this.time_diff(id_sort);
+            end
         end
         
         function this = append(this, time, time_type, is_gps)
@@ -1036,7 +1054,7 @@ classdef GPS_Time < Exportable & handle
                 is_ext = false;
             end
             
-            nominal_time_zero = round(this.first.getMatlabTime() * 2)/2; % round at the closest time
+            nominal_time_zero = round(this.first.getMatlabTime()); % round at the closest time
             rinex_time = this.getRefTime(nominal_time_zero);
             nominal_time = round(rinex_time / rate) * rate;
                 
@@ -1056,7 +1074,24 @@ classdef GPS_Time < Exportable & handle
                 nominal_time = GPS_Time(nominal_time_zero, nominal_time, this.isGPS(), 2);
                 nominal_time.toUnixTime;
             end
-        end       
+        end
+        
+        function [rounded_time] = getRoundedTime(this, rate)
+            % get the rounded time aka rounded time cosidering a constant
+            % sampling rate
+            % w.r.t. nominal time, rounded time is fixed at the center of the session, nominal at the border
+            %
+            % OUTPUT
+            %   rounded_time        it's the rounded time in the middle of rate steps
+            %
+            % SYNTAX
+            %   [rounded_time] = this.getRoundedTime(<rate>)
+            
+            rounded_time = this.getCopy;
+            rounded_time = rounded_time.addIntSeconds(rate/2);
+            rounded_time = rounded_time.getNominalTime(rate);
+            rounded_time = rounded_time.addIntSeconds(-rate/2);
+        end
         
         function [mat_time] = getMatlabTime(this)
             % get Matlab Time, precision up to the 0.1 milliseconds precision

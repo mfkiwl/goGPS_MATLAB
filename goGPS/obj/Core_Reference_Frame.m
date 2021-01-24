@@ -198,17 +198,26 @@ classdef Core_Reference_Frame < handle
                     if sum(idx_sta) > 0
                         st_validity_time = this.start_validity_epoch.getSubSet(idx_sta).getGpsTime();
                         end_validity_time = this.end_validity_epoch.getSubSet(idx_sta).getGpsTime();
-                        epoch_gps = epoch.getGpsTime();
-                        idx_sta2 = st_validity_time < epoch_gps & end_validity_time > epoch_gps;
-                        if not(any(idx_sta2))
-                            log = Core.getLogger;
-                            log.addMessage(log.indent('No valid a-priori coordinate found.'));
+                        if nargin > 2 && not(isempty(epoch))
+                            epoch_gps = epoch.getGpsTime();
+                            idx_sta2 = st_validity_time < epoch_gps & end_validity_time > epoch_gps;
+                            if not(any(idx_sta2))
+                                log = Core.getLogger;
+                                log.addMessage(log.indent('No valid a-priori coordinate found.'));
+                            end
+                            idx_sta = idx_sta(idx_sta2);
                         end
-                        idx_sta = idx_sta(idx_sta2);
                         if not(isempty(idx_sta))
-                            idx_sta = idx_sta(1);
-                            dt = epoch - this.start_validity_epoch.getEpoch(idx_sta);
-                            xyz = this.xyz(idx_sta,:) + (this.vxvyvz(idx_sta,:)' * (dt./(365.25 * 86400))')';
+                            idx_sta = idx_sta(end); % take only the last coordinate matching
+                            
+                            % remove velocity
+                            if nargin > 2 && not(isempty(epoch))
+                                dt = epoch - this.start_validity_epoch.getEpoch(idx_sta);
+                                xyz = this.xyz(idx_sta,:) + (this.vxvyvz(idx_sta,:)' * (dt./(365.25 * 86400))')';
+                            else
+                                xyz = this.xyz(idx_sta,:);
+                            end
+                            
                             is_valid = true;
                             std_pup = this.std_pup(idx_sta,:);
                         end

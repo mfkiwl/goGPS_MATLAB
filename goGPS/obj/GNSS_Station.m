@@ -696,26 +696,6 @@ classdef GNSS_Station < handle
             log.addStatusOk('Export completed successfully');
         end
         
-        function out_file_name = getCooOutPath(this, out_file_prefix)
-            % Get the path to the coordinatefile
-            %
-            % SYNTAX
-            %   out_file_path = this.getCooOutPath(<out_file_prefix>)
-            
-            state = Core.getState();
-            if nargin < 2 || isempty(out_file_prefix)
-                out_dir = state.getOutDir();
-                out_file_prefix = strrep([state.getPrjName '_'], ' ', '_');
-            end
-            % Add the folder if not present
-            if sum(out_file_prefix == filesep) == 0
-                out_dir = state.getOutDir();
-                out_file_prefix = fullfile(out_dir, out_file_prefix);
-            end
-            out_file_name = strrep([out_file_prefix this.getMarkerName4Ch '.coo'], ' ', '_');
-            
-        end
-        
         function exportAppendedCoo(sta_list, mode, out_file_prefix)
             % Export the current value of the coordinate to a text coordinate file
             % One file per receiver, containing: time_stamp: 
@@ -740,152 +720,54 @@ classdef GNSS_Station < handle
             if ~isempty(sta_list)
                 log = Core.getLogger;
                 for rec = sta_list(:)'
-                    now_time = GPS_Time.now();
-                    if nargin < 3 || isempty(out_file_prefix)
-                        out_file_name = rec.getCooOutPath();
+                    if flag_out && not(rec.isEmptyOut_mr)
+                        coo = rec.out.getPos;
                     else
-                        out_file_name = rec.getCooOutPath(out_file_prefix);
+                        coo = rec.work.getPos;
+                    end
+                     
+                    if nargin < 3 || isempty(out_file_prefix)
+                        out_file_name = coo.getCooOutPath();
+                    else
+                        out_file_name = coo.getCooOutPath(out_file_prefix);
+                    end
+                    coo.exportAsCoo(out_file_name)
+                end
+            end
+        end
+        
+        function exportAppendedBernyCoo(sta_list, mode, out_file_prefix)
+            % Export the current value of the coordinate to a CRD and OUT file as Bernese software does
+            %
+            % INPUT:
+            %   mode             it could be 'out' (dafault), 'work', ...(future modes)
+            %   out_file_prefix  prefix of the out file
+            %
+            % SYNTAX:
+            %   this.exportAppendedBernyCoo(this, <mode = 'out'>, <out_file_name>)
+            
+            % Remove empty receivers
+            if nargin < 2 || isempty(mode)
+                mode = 'out'; % use median out coordinates
+            end
+            flag_out = strcmpi(mode, 'out');
+            
+            sta_list = sta_list(~sta_list.isEmpty_mr);
+            if ~isempty(sta_list)
+                log = Core.getLogger;
+                for rec = sta_list(:)'
+                    if flag_out && not(rec.isEmptyOut_mr)
+                        coo = rec.out.getPos;
+                    else
+                        coo = rec.work.getPos;
                     end
                     
-                    log.addMarkedMessage(sprintf('Updating coordinates to %s', out_file_name));
-                    try
-                        if exist(out_file_name, 'file') == 2
-                            % Read and append
-                            [txt, lim] = Core_Utils.readTextFile(out_file_name, 3);
-                            if isempty(lim)
-                                file_ok = false;
-                                timestamp = [];
-                            else
-                                % Verify the file version (it should match 1.0):
-                                id_ver = find(txt(lim(:,1) + 1) == 'F'); % +FileVersion
-                                file_ok = not(isempty(regexp(txt(lim(id_ver, 1):lim(id_ver, 2)), '(?<=FileVersion[ ]*: )1.0', 'once')));
-                                
-                                % Data should be present
-                                timestamp = [];
-                                if file_ok
-                                    id_len_ok = find(lim(:,3)+1 >= 9);
-                                    data_start = id_len_ok(find(txt(lim(id_len_ok,1) + 9) == 't') + 1); % +DataStart
-                                    id_len_ok = find(lim(:,3)+1 >= 8);
-                                    data_stop = id_len_ok(find(txt(lim(id_len_ok,1) + 7) == 'd') -1); % +DataStop
-                                    if isempty(data_stop)
-                                        data_stop = size(lim, 1);
-                                    end
-                                    if isempty(data_start)
-                                        file_ok = false;
-                                    else
-                                        id_data = lim(data_start:data_stop,1);
-                                        % Read old timestamps
-                                        timestamp = datenum(txt(repmat(id_data, 1, 19) + repmat(0:18, numel(id_data), 1)), 'yyyy-mm-dd HH:MM:SS');
-                                    end
-                                else
-                                    data_start = 0;
-                                end
-                                
-                                % Check description field
-                                % use the old one for the file
-                                if file_ok
-                                    id_descr = find(txt(lim(:,1) + 4) == 'c'); % + Description
-                                    if isempty(id_descr)
-                                        file_ok = false;
-                                    else
-                                        str_tmp = sprintf('%s\n', txt(lim(id_descr,1):lim(id_descr,2))); % Keep the description of the old file
-                                    end
-                                end
-                            end
-                        else
-                            file_ok = false; 
-                            timestamp = [];
-                        end
-                        
-                        if flag_out && not(rec.isEmptyOut_mr)
-                            coo = rec.out.getPos;
-                            quality_info = rec.out.quality_info;
-                        else
-                            coo = rec.work.getPos;
-                            quality_info = rec.work.quality_info;
-                        end
-                        
-                        
-                        fid = fopen(out_file_name, 'Wb');
-                        if not(file_ok)
-                            str_tmp = sprintf('+Description    : XYZ Position file generated on %s\n', now_time.toString('dd-mmm-yyyy HH:MM'));
-                        end
-                        str_tmp = sprintf('%s+LastChange     : %s\n', str_tmp, now_time.toString('dd-mmm-yyyy HH:MM'));
-                        str_tmp = sprintf('%s+Software       : goGPS\n', str_tmp);
-                        str_tmp = sprintf('%s+Version        : %s\n', str_tmp, Core.GO_GPS_VERSION);
-                        str_tmp = sprintf('%s+FileVersion    : 1.0\n', str_tmp);
-                        str_tmp = sprintf('%s+MonitoringPoint: %s\n', str_tmp, rec.getMarkerName4Ch);
-                        str_tmp = sprintf('%s+LongName       : %s\n', str_tmp, rec.getMarkerName);
-                        str_tmp = sprintf('%s+SensorType     : GNSS\n', str_tmp);
-                        str_tmp = sprintf('%s+SensorName     : GNSS\n', str_tmp);
-                        str_tmp = sprintf('%s+DataScale      : m\n', str_tmp);
-                        str_tmp = sprintf('%s+DataScale Cov  : mm^2\n', str_tmp);
-                        str_tmp = sprintf('%s+DataType       :\n', str_tmp);
-                        str_tmp = sprintf('%s -00            : timeStamp\n', str_tmp);
-                        str_tmp = sprintf('%s -01            : exportTime\n', str_tmp);
-                        str_tmp = sprintf('%s -02            : x\n', str_tmp);
-                        str_tmp = sprintf('%s -03            : y\n', str_tmp);
-                        str_tmp = sprintf('%s -04            : z\n', str_tmp);
-                        str_tmp = sprintf('%s -05            : Cxx\n', str_tmp);
-                        str_tmp = sprintf('%s -06            : Cyy\n', str_tmp);
-                        str_tmp = sprintf('%s -07            : Czz\n', str_tmp);
-                        str_tmp = sprintf('%s -08            : Cxy\n', str_tmp);
-                        str_tmp = sprintf('%s -09            : Cxz\n', str_tmp);
-                        str_tmp = sprintf('%s -10            : Cyz\n', str_tmp);
-                        str_tmp = sprintf('%s -11            : nEpochs\n', str_tmp);
-                        str_tmp = sprintf('%s -12            : nObs\n', str_tmp);
-                        str_tmp = sprintf('%s -13            : fixingRatio\n', str_tmp);
-                        str_tmp = sprintf('%s+DataStart\n', str_tmp);
-                        fprintf(fid, str_tmp);
-     
-                        % Append New
-                        str_tmp = '';
-                        e = 1; % old epoch
-                        for i = 1 : coo.time.length
-                            cur_time = round(coo.time.getEpoch(i).getMatlabTime*86400)/86400;
-                            while e <= numel(timestamp) && (cur_time > timestamp(e))
-                                old_line = txt(lim(data_start + (e-1),1):lim(data_start + (e-1),2));
-                                str_tmp = sprintf('%s%s\n', str_tmp, old_line);
-                                e = e +1;
-                            end
-                            try
-                                time = coo.time.getEpoch(i).toString('yyyy-mm-dd HH:MM:SS');
-                                xyz = coo.xyz(i,:);
-                                if isempty(coo.Cxx)
-                                    cov = zeros(3,3);
-                                else
-                                    cov = coo.Cxx(:,:,i)*1e6;
-                                end
-                                str_tmp = sprintf('%s%s;%s;%.4f;%.4f;%.4f;%.4f;%.4f;%.4f;%.4f;%.4f;%.4f;%d;%d;%.2f\n', str_tmp, time, now_time.toString('yyyy-mm-dd HH:MM:SS'), ...
-                                    xyz(1), xyz(2), xyz(3), ...
-                                    cov(1,1), cov(2,2), cov(3,3), cov(1,2), cov(1,3), cov(2,3), ...
-                                    quality_info.n_epochs(i), ...
-                                    quality_info.n_obs(i), ...
-                                    quality_info.fixing_ratio(i));
-                            catch ex
-                                % There is an inconsistency with the entry
-                                % could not add this epoch
-                                log.addWarning('There is a corrupted coordinate');
-                            end
-                            % Skip recomputed old epochs
-                            while e <= numel(timestamp) && (cur_time == timestamp(e))
-                                e = e +1;
-                            end
-                        end
-                        %  Insert old epochs not yet recomputed
-                        while e <= numel(timestamp)
-                            old_line = txt(lim(data_start + (e-1),1):lim(data_start + (e-1),2));
-                            str_tmp = sprintf('%s%s\n', str_tmp, old_line);
-                            e = e +1;
-                        end
-                        fprintf(fid, str_tmp);
-                        fprintf(fid, '+DataEnd\n');
-                        fclose(fid);
-                        Core.getLogger.addStatusOk(sprintf('Exporting completed successfully'));
-                    catch ex
-                        Core.getLogger.addError(sprintf('Exporting failed'));
-                        Core_Utils.printEx(ex);
+                    if nargin < 3 || isempty(out_file_prefix)
+                        out_file_name = coo.getOutPath();
+                    else
+                        out_file_name = coo.getOutPath(out_file_prefix);
                     end
+                    coo.exportAsBerny(out_file_name)
                 end
             end
         end
@@ -1430,8 +1312,8 @@ classdef GNSS_Station < handle
                     try
                         date_lim = regexp(file_info(f).name, '(?<=_)[0-9]*(?=_|.mat)', 'match');
                         date_lim = [datenum(date_lim{1}, 'yyyymmddHHMM'); datenum(date_lim{2}, 'yyyymmddHHMM')];
-                        date = [date; date_lim];
-                        idf = [idf; f; f];
+                        date = [date; date_lim'];
+                        idf = [idf; f f];
                     catch ex
                         log.addWarning(sprintf('File not valid found in MP dir "%s"', file_info(f).name));
                     end
@@ -1439,14 +1321,22 @@ classdef GNSS_Station < handle
                 % Find the closer multipath map file
                 if ~isempty(date)
                     try
-                        [date, id_sort] = sort(date);
                         if isempty(this.work) || isempty(this.work.getTime)
                             sss_center = core.state.sss_date_start.getMatlabTime + core.state.sss_duration/86400 * (core.getCurrentSession -0.5);
                         else
                             sss_center = this.work.getTime.getCentralTime.getMatlabTime;
                         end
-                        [~, id_min] = min(abs(date - sss_center)); 
-                        closer_fid = idf(id_sort(id_min));
+                        % check if the data is inside a MP map
+                        closer_fid = idf(find((date(:,2) >= sss_center) & (date(:,1) <= sss_center), 1, 'last'), 2);
+                        % Always take the newer map in case of overlap
+                        if isempty(closer_fid)
+                            % Check for the closer map
+                            date = date(:);
+                            idf = idf(:);
+                            [date, id_sort] = sort(date);
+                            [~, id_min] = min(abs(date - sss_center));
+                            closer_fid = idf(id_sort(id_min));
+                        end
                         file_name = fullfile(out_dir, file_info(closer_fid).name);
                         log.addMarkedMessage(sprintf('%s - Importing Multipath mitigation model from "%s"',  marker_name, file_name));
                         load(file_name, 'ant_mp');

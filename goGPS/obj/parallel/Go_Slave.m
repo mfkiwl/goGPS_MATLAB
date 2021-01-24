@@ -82,7 +82,11 @@ classdef Go_Slave < Com_Interface
     % ==================================================================================================================================================
     methods (Access = private)        
         function delete(this)
-            % delete
+            % If log file is open try to close it
+            try
+                this.log.closeFile
+            catch
+            end
         end
     end
     
@@ -228,6 +232,8 @@ classdef Go_Slave < Com_Interface
             while stay_alive
                 try
                     this.revive();
+                    core = Core.getCurrentCore(); % Init Core
+                    core.setLogger(this.log); % Use slave logger
                     this.sendMsg(this.MSG_BORN, sprintf('Helo! My name is "%s"', this.id));
                     this.checkMsg([this.id, '_' Parallel_Manager.MSG_ASKACK Parallel_Manager.ID], true, false); % WAIT ACK MESSAGE
                     this.sendMsg(this.MSG_ACK, sprintf('I''m ready to work!'));
@@ -235,7 +241,6 @@ classdef Go_Slave < Com_Interface
                     this.deleteMsg();
                     if ~(isnumeric(msg))
                         % Creating worker
-                        core = Core.getCurrentCore(); % Init Core
                         core.initPreloadSession();
                         core.clearSingletons();
                         core.initSimpleHandlers();
@@ -253,8 +258,15 @@ classdef Go_Slave < Com_Interface
                         core.met_list = tmp.met_list; % load the meteorological list of files
                         
                         % No colormode for slaves (faster execution)
+                        core.log = this.log; % Use slave logger
                         core.log.setColorMode(0);
-                        Logger.getInstance.setColorMode(0);
+                        core.log.enableFileOut();
+                        log_path = fullfile(core.state.getComDir, 'log', sprintf('goGPS_slave_%s_run_%s_${NOW}.log', strrep(core.state.getPrjName, ' ', '_'), this.id));
+                        log_path = strrep(log_path, '${NOW}', GPS_Time.now.toString('yyyymmdd_HHMMSS'));
+                        core.log.setOutFile(log_path); % <= to enable project logging
+                        core.log.enableFileOut();
+                        this.log = core.log;
+                        this.log.addMarkedMessage('Logging to file');
                         
                         this.id = regexp(msg, [Go_Slave.SLAVE_READY_PREFIX iif(this.slave_type == 1, this.SLAVE_TARGET_PREFIX, this.SLAVE_SESSION_PREFIX) '[0-9]*'], 'match', 'once');
                         
@@ -282,6 +294,7 @@ classdef Go_Slave < Com_Interface
                         active_ps = true;
                         while active_ps
                             try
+                                core.log.enableFileOut();
                                 msg = this.checkMsg([this.id '_' Parallel_Manager.MSG_DO '*' Parallel_Manager.ID], true, true); % WAIT ACK MESSAGE
                                 if isnumeric(msg)
                                     active_ps = false;
@@ -423,7 +436,7 @@ classdef Go_Slave < Com_Interface
                                             end
                                         end
                                         atmo = Core.getAtmosphere;
-                                        save(fullfile(this.getComDir, sprintf('job%04d_%s.mat', req_id, this.id)), 'rec', 'atmo');
+                                        save(fullfile(this.getComDir, sprintf('job%04d_%s.mat', req_id, this.id)), 'rec', 'atmo', 'log_path');
                                     end
                                     pause(0.1); % be sure that the file is saved correctly
                                     core.rec = []; % empty space
@@ -472,8 +485,16 @@ classdef Go_Slave < Com_Interface
                         end
                         clear core state rec_id r msg
                     end
+                    try
+                        this.log.closeFile
+                    catch
+                    end
                 catch ex
                     Core_Utils.printEx(ex);
+                    try
+                        this.log.closeFile
+                    catch
+                    end
                 end
             end
             

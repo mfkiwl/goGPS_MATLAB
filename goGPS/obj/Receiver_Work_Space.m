@@ -4420,20 +4420,10 @@ classdef Receiver_Work_Space < Receiver_Commons
             end
         end
         
-        function is_fixed = isFixed(this)
-            rf = Core.getReferenceFrame;
-            is_fixed = rf.isFixed(this.parent.getMarkerName4Ch);
-        end
-        
-         function is_fixed = isFixedPrepro(this)
-            rf = Core.getReferenceFrame;
-            is_fixed = rf.isFixedPrepro(this.parent.getMarkerName4Ch);
-        end
-        
-        function is_fixed = hasGoodApriori(this)
+        function has_good = hasGoodApriori(this)
             % this is meant to skip any positionin based on code and estimate the postionon only in PPP or network phase adjutsment
             rf = Core.getReferenceFrame;
-            is_fixed = rf.hasGoodAPriori(this.parent.getMarkerName4Ch);
+            has_good = rf.hasGoodAPriori(this.parent.getMarkerName4Ch);
         end
         
         function has_apr = hasAPriori(this)
@@ -4994,53 +4984,20 @@ classdef Receiver_Work_Space < Receiver_Commons
             %   mfw: wet mapping function
             %
             % SYNTAX
-            %   [mfh, mfw] = this.getSlantMF()            
+            %   [mfh, mfw] = this.getSlantMF()   
             
-            n_sat = this.parent.getMaxSat;
             if nargin == 1
-                id_sync = this.id_sync;
-            end
-            if n_sat == 0
-                mfh = [];
-                mfw = [];
-                cotan_term = [];
-            else
-                if this.length > 0
-                    atmo = Core.getAtmosphere();
-                    [lat, lon, h_ellipse, h_ortho] = this.getMedianPosGeodetic();
-                    lat = median(lat);
-                    lon = median(lon);
-                    h_ortho = median(h_ortho);
-                    if ~isempty(this)
-                        if this.state.mapping_function == Prj_Settings.MF_NIEL
-                            [mfh, mfw] = atmo.niell(this.time, lat./180*pi, zero2nan(this.sat.el)./180*pi,h_ellipse);
-                        elseif this.state.mapping_function == Prj_Settings.MF_VMF1
-                            [mfh, mfw] = atmo.vmf_grd(this.time, lat./180*pi, lon./180*pi, (this.sat.el)./180*pi, h_ellipse,1);
-                        elseif this.state.mapping_function == Prj_Settings.MF_VMF3_1
-                            [mfh, mfw] = atmo.vmf_grd(this.time, lat./180*pi, lon./180*pi, (this.sat.el)./180*pi, h_ellipse,3);
-                        elseif this.state.mapping_function == Prj_Settings.MF_VMF3_5
-                            [mfh, mfw] = atmo.vmf_grd(this.time, lat./180*pi, lon./180*pi, (this.sat.el)./180*pi, h_ellipse,3);
-                        elseif this.state.mapping_function == Prj_Settings.MF_GMF
-                            [mfh, mfw] = atmo.gmf(this.time, lat./180*pi, lon./180*pi, h_ortho, zero2nan(this.sat.el)./180*pi);
-                        end
-                       
-                        if ~isempty(id_sync)
-                            mfh = mfh(id_sync, :);
-                            mfw = mfw(id_sync, :);
-                        end
-                        
-                        if nargout > 2
-                            if this.state.mapping_function_gradient == 1
-                                cotan_term = Atmosphere.chenHerringGrad(zero2nan(this.sat.el)./180*pi);
-                            elseif this.state.mapping_function_gradient == 2
-                                [cotan_term] = Atmosphere.macmillanGrad(zero2nan(this.sat.el)./180*pi);
-                            end
-                            if ~isempty(id_sync)
-                                cotan_term = cotan_term(id_sync, :);
-                            end
-                        end
-                    end
+                try
+                    id_sync = this.id_sync;
+                catch
+                    id_sync = [];
                 end
+            end
+            
+            if nargout == 3
+                [mfh, mfw, cotan_term] = this.getSlantMFGen(id_sync);
+            else
+                [mfh, mfw] = this.getSlantMFGen(id_sync);
             end
         end
         
@@ -9393,7 +9350,7 @@ classdef Receiver_Work_Space < Receiver_Commons
             %
             % SYNTAX
             %   is_empty = this.isEmpty();
-            has_range =  zeros(numel(this), 1);
+            has_range =  zeros(numel(this), 1, 'logical');
             for r = 1 : numel(this)
                 has_range(r) =  this(r).hasRangeObs();
             end

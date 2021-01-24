@@ -2243,6 +2243,9 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
         function j_ini = insertTabAdvanced(this, container)
             tab = uix.VBox('Parent', container, 'Tag', 'ADV');
             
+            name_box = Core_UI.insertPanelLight(tab, 'Project Name');
+            [~, this.edit_texts{end+1}] = Core_UI.insertEditBox(name_box, 'Project Name', 'prj_name', '', @this.onEditChange, [185 -1 0 0]);
+
             com_box = Core_UI.insertPanelLight(tab, 'Parallelism');
             [~, this.edit_texts{end+1}, this.flag_list{end + 1}] = Core_UI.insertDirBox(com_box, 'Communication dir', 'com_dir', @this.onEditChange, [25 160 -1 25]);
 
@@ -2286,7 +2289,7 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                 'Callback', @this.updateAndCheckRecList);
             
             setting_grid.Widths = [-1 128];
-            tab.Heights = [50 -1];
+            tab.Heights = [50 50 -1];
         end
     end
     %% METHODS getters
@@ -2632,25 +2635,9 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                 
                 rin_list = core.rin_list;
                 try
-                    legacy_marker = Daemon_Guard.LEGACY_MARKER;
-                catch
-                    legacy_marker = {'CAC1', 'CAC2', 'CAC3', 'ARV0'};
-                end
-                try
                     ignore_missing_marker = Daemon_Guard.IGNORE_MARKER;
                 catch
                         ignore_missing_marker = {...
-                            'ID01', ...
-                            'ID02', ...
-                            'ID03', ...
-                            'ID04', ...
-                            'ID05', ...
-                            'ID06', ...
-                            'ID07', ...
-                            'ID08', ...
-                            'ID09', ...
-                            'ID10', ...
-                            'ID11', ...
                             'TW01', ...
                             'TW02', ...
                             'TW03', ...
@@ -2679,7 +2666,11 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                         marker = rin_list(r).marker_name{bad_id};
                         marker = marker(1:4);
                         cur_time_start = round(24 * rin_list(r).first_epoch.getEpoch(bad_id).getMatlabTime) / 24;
-                        
+                        if cur_time_start > datenum('2021-01-03 00:00')
+                            legacy_marker = {'ARV0'};
+                        else
+                            legacy_marker = {'CAC1', 'CAC2', 'CAC3', 'ARV0'};
+                        end
                         log.addMessage(log.indent(sprintf(' - %5.1f%%, %s @ %s "%s"\n', fullrate, marker, datestr(cur_time_start, 'yyyy-mm-dd HH:MM'), file_name)));
                         str = sprintf('%spython3 ./getGMU.py -n 1 -u -m %s %s -d %s\n', str, marker, iif(ismember(marker, legacy_marker), '--legacy', ''), datestr(cur_time_start, 'yyyy-mm-dd -t HH:MM'));
                         flag_any = true;
@@ -2699,6 +2690,11 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                             t = sss_start : sss_stop;
                             t_bad = setdiff(t, file_start) /  24;
                             for missing_epoch = t_bad
+                                if missing_epoch > datenum('2021-01-03 00:00')
+                                    legacy_marker = {'ARV0'};
+                                else
+                                    legacy_marker = {'CAC1', 'CAC2', 'CAC3', 'ARV0'};
+                                end
                                 log.addMessage(log.indent(sprintf(' - %5.1f%%, %s @ %s\n', 0, marker, datestr(missing_epoch, 'yyyy-mm-dd HH:MM'))));
                                 str = sprintf('%spython3 ./getGMU.py -n 1 -u -m %s %s -d %s\n', str, marker, iif(ismember(marker, legacy_marker), '--legacy', ''), datestr(missing_epoch, 'yyyy-mm-dd -t HH:MM'));
                                 flag_any = true;
@@ -2713,6 +2709,7 @@ classdef GUI_Edit_Settings < GUI_Unique_Win
                     log.addMarkedMessage('Good, it seems there are no missing or partially downloaded files.');
                 end
                 fclose(fid);
+                pause(0.2);
                 if flag_any
                     log.addMarkedMessage(sprintf('Run script: %s\n', script_name));
                     % fprintf('\n------------------------------------------------------------------------- \n')

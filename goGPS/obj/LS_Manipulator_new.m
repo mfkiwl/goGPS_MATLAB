@@ -97,7 +97,6 @@ classdef LS_Manipulator_new < handle
         
         time_obs   % epoch of the observation (GPS_Time)
         ref_time_obs % epoch of the observation since time mimimum (seconds)
-        rate_obs     % rate of observations
         satellite_obs % goid satellite of the observations
         receiver_obs % receiver of the observations
         azimuth_obs % azimuth of the observations
@@ -129,7 +128,7 @@ classdef LS_Manipulator_new < handle
         time_par   % time of the parameter!!! very important the parameters (within the same class e.g. time for satellite s ) MUST be ordered in chronological order
         param_par  % parametrization of the parameter
         time_min   % ref_time_of the parameter
-        obs_rate
+        obs_rate   % rate of observations
         rec_par    % receiver of the parameter
         sat_par    % satellite of the parameter
         class_par  % class of the parameter
@@ -1818,7 +1817,7 @@ classdef LS_Manipulator_new < handle
                 
                 max_ep = max(this.ref_time_obs);
                 if this.time_pseudo.length > 0
-                    ref_time_obs = [this.ref_time_obs(~this.outlier_obs); this.time_pseudo.getNominalTime(this.rate_obs).getRefTime(this.time_min.getMatlabTime)];
+                    ref_time_obs = [this.ref_time_obs(~this.outlier_obs); this.time_pseudo.getNominalTime(this.obs_rate).getRefTime(this.time_min.getMatlabTime)];
                 else
                     ref_time_obs = [this.ref_time_obs(~this.outlier_obs);];
                 end
@@ -2785,12 +2784,12 @@ classdef LS_Manipulator_new < handle
             this.bondParamsGenerateIdx(ls_param);
         end
         
-        function setUpNET(this, sta_list, coo_rate, flag, param_selction, parametrization, time_lim)
+        function setUpNET(this, sta_list, flag, param_selction, parametrization, time_lim)
             % set up single point adjustment
             %
             % SYNTAX:
             %   this.setUpSA(rec_work,id_sync,obs_type)
-            if nargin < 4
+            if nargin < 3
                 param_selction = [this.PAR_REC_X ;
                     this.PAR_REC_Y;
                     this.PAR_REC_Z;
@@ -2808,12 +2807,12 @@ classdef LS_Manipulator_new < handle
                     this.PAR_SAT_EBFR;
                     this.PAR_SAT_EB ];
             end
-            if nargin < 6
+            if nargin < 5
                 parametrization = LS_Parametrization();
             end
             % get time common at least to two receiver
-            [p_time, id_sync] = Receiver_Work_Space.getSyncTimeExpanded(sta_list, coo_rate);
-            if nargin == 7
+            [p_time, id_sync] = Receiver_Work_Space.getSyncTimeExpanded(sta_list, []);
+            if nargin == 6
                 % ignore the data outiside the time limits of the network
                 id_ok = p_time.getNominalTime >= time_lim.first & p_time.getNominalTime <= time_lim.last;
                 id_sync(~id_ok, :) = NaN;

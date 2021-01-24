@@ -193,6 +193,24 @@ classdef Receiver_Commons <  matlab.mixin.Copyable
             cc = Core.getState.getConstellationCollector;
         end
         
+        function is_fixed = isFixed(this)
+            % Is the position of this station fixed?
+            %
+            % SYNTAX
+            %   is_fixed = this.isFixed()
+            rf = Core.getReferenceFrame;
+            is_fixed = rf.isFixed(this.parent.getMarkerName4Ch);
+        end
+        
+        function is_fixed = isFixedPrepro(this)
+            % Is the position of this station fixed for pre-processing?
+            %
+            % SYNTAX
+            %   is_fixed = this.isFixedPrepro()
+            rf = Core.getReferenceFrame;
+            is_fixed = rf.isFixedPrepro(this.parent.getMarkerName4Ch);
+        end
+        
         function toStringPos(this)
             % Display on screen information about the receiver position
             % SYNTAX this.toStringPos();
@@ -272,6 +290,7 @@ classdef Receiver_Commons <  matlab.mixin.Copyable
             end
             
             if flag_add_coo == -100
+                % Get it from PrePro (or old PPP)
                 if ~isempty(this.xyz)
                     coo = Coordinates.fromXYZ(this.xyz);
                 elseif ~isempty(this.parent.work.xyz)
@@ -285,6 +304,25 @@ classdef Receiver_Commons <  matlab.mixin.Copyable
                         coo.setTime(tmp);
                     end
                 end
+                coo.setRate(Core.getState.sss_duration);
+                coo.info.n_epo = this.quality_info.n_epochs;
+                coo.info.n_obs = this.quality_info.n_obs;
+                coo.info.s0 = this.quality_info.s0;
+                coo.info.s0_ip = this.quality_info.s0_ip;
+                coo.info.flag = 0;
+                coo.info.fixing_ratio = 0;
+                if isempty(coo.info.s0_ip) || isnan(coo.info.s0_ip)
+                    coo.info.coo_type = 'G';
+                else
+                    coo.info.coo_type = iif(this.isFixed || this.isFixedPrepro, 'F', 'G');
+                end
+                if coo.info.coo_type == 'F'
+                    coo.Cxx = zeros(3); % Fixed covariance = 0
+                else
+                    coo.Cxx = nan(3); % Unknown coordinate covariance NaN
+                end
+                coo.info.rate = this.time.getRate;
+                coo.info.master_name = categorical({this.parent.getMarkerName4Ch});
             elseif flag_add_coo == 0
                 coo = this.coo;
                 % Fallback (in case of empty coo)
@@ -308,8 +346,7 @@ classdef Receiver_Commons <  matlab.mixin.Copyable
                     end
                 end
             end
-            coo.setName(this.parent.getMarkerName4Ch)
-                        
+            coo.setName(this.parent.getMarkerName4Ch, this.parent.getMarkerName);
         end
         
         function xyz = getPosXYZ(this)
@@ -506,19 +543,73 @@ classdef Receiver_Commons <  matlab.mixin.Copyable
             end
         end
         
+        function [mfh, mfw, cotan_term] = getSlantMFGen(this, id_sync)
+            % Get Mapping function for the satellite slant
+            %
+            % OUTPUT
+            %   mfh: hydrostatic mapping function
+            %   mfw: wet mapping function
+            %
+            % SYNTAX
+            %   [mfh, mfw] = this.getSlantMF()            
+            
+            n_sat = this.parent.getMaxSat;
+            if nargin == 1
+                try
+                    id_sync = this.id_sync;
+                catch
+                    id_sync = [];
+                end
+            end
+            if n_sat == 0
+                mfh = [];
+                mfw = [];
+                cotan_term = [];
+            else
+                if this.length > 0
+                    atmo = Core.getAtmosphere();
+                    [lat, lon, h_ellipse, h_ortho] = this.getMedianPosGeodetic();
+                    lat = median(lat);
+                    lon = median(lon);
+                    h_ortho = median(h_ortho);
+                    if ~isempty(this)
+                        if this.state.mapping_function == Prj_Settings.MF_NIEL
+                            [mfh, mfw] = atmo.niell(this.time, lat./180*pi, zero2nan(this.sat.el)./180*pi,h_ellipse);
+                        elseif this.state.mapping_function == Prj_Settings.MF_VMF1
+                            [mfh, mfw] = atmo.vmf_grd(this.time, lat./180*pi, lon./180*pi, (this.sat.el)./180*pi, h_ellipse,1);
+                        elseif this.state.mapping_function == Prj_Settings.MF_VMF3_1
+                            [mfh, mfw] = atmo.vmf_grd(this.time, lat./180*pi, lon./180*pi, (this.sat.el)./180*pi, h_ellipse,3);
+                        elseif this.state.mapping_function == Prj_Settings.MF_VMF3_5
+                            [mfh, mfw] = atmo.vmf_grd(this.time, lat./180*pi, lon./180*pi, (this.sat.el)./180*pi, h_ellipse,3);
+                        elseif this.state.mapping_function == Prj_Settings.MF_GMF
+                            [mfh, mfw] = atmo.gmf(this.time, lat./180*pi, lon./180*pi, h_ortho, zero2nan(this.sat.el)./180*pi);
+                        end
+                       
+                        if ~isempty(id_sync)
+                            mfh = mfh(id_sync, :);
+                            mfw = mfw(id_sync, :);
+                        end
+                        
+                        if nargout > 2
+                            if this.state.mapping_function_gradient == 1
+                                cotan_term = Atmosphere.chenHerringGrad(zero2nan(this.sat.el)./180*pi);
+                            elseif this.state.mapping_function_gradient == 2
+                                [cotan_term] = Atmosphere.macmillanGrad(zero2nan(this.sat.el)./180*pi);
+                            end
+                            if ~isempty(id_sync)
+                                cotan_term = cotan_term(id_sync, :);
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        
         function [slant_td, slant_wd, go_id] = getSlantTD(this, go_id)
             % Get the slant total delay
             %
             % SYNTAX
             %   [slant_td, go_id] = this.getSlantTD();
-            
-            if nargin < 2 || isempty(go_id) || strcmp(go_id, 'all')
-                this.log.addMessage(this.log.indent('Updating tropospheric errors'))
-                
-                go_id = unique(this.go_id)';
-            else
-                go_id = serialize(go_id)';
-            end            
             
             id_sync  = this.getIdSync;
             
@@ -542,6 +633,7 @@ classdef Receiver_Commons <  matlab.mixin.Copyable
                     mfw = [];
                 end
             end
+            
             if state.mapping_function_gradient == 1
                 if ~isempty(zwd)
                     cotan_term = zero2nan(Atmosphere.chenHerringGrad(zero2nan(this.sat.el(id_sync, :))));
@@ -552,9 +644,22 @@ classdef Receiver_Commons <  matlab.mixin.Copyable
                 if ~isempty(zwd)
                     cotan_term = zero2nan(Atmosphere.macmillanGrad(zero2nan(this.sat.el(id_sync, :))).*mfw);
                 else
-                    cotan_term = zeros(size(ge));;
+                    cotan_term = zeros(size(ge));
                 end
             end
+            
+            if nargin < 2 || isempty(go_id) || strcmp(go_id, 'all')
+                this.log.addMessage(this.log.indent('Updating tropospheric errors'))
+                try
+                    go_id = unique(this.go_id)';
+                catch
+                    % If it fails I'm in receiver output
+                    go_id = 1 : size(mfh, 2);
+                end
+            else
+                go_id = serialize(go_id)';
+            end            
+            
             % Computing delays
             if any(mfh(:)) && any(mfw(:))
                 if any(ge(:))
@@ -1706,7 +1811,7 @@ classdef Receiver_Commons <  matlab.mixin.Copyable
                 else
                     % Use coordinates from coo files
                     % If they exist
-                    coo_path = recs(baseline_ids(b, 1)).parent.getCooOutPath();
+                    coo_path = recs(baseline_ids(b, 1)).getPos.getCooOutPath();
                     if exist(coo_path, 'file') == 2
                         coo_ref = Coordinates.fromCooFile(coo_path);
                         flag_ready = true;
@@ -1715,7 +1820,7 @@ classdef Receiver_Commons <  matlab.mixin.Copyable
                         coo_ref = Coordinates();
                     end
                     
-                    coo_path = recs(baseline_ids(b, 2)).parent.getCooOutPath();
+                    coo_path = recs(baseline_ids(b, 2)).getPos.getCooOutPath();
                     if exist(coo_path, 'file') == 2
                         coo_trg = Coordinates.fromCooFile(coo_path);
                     else
@@ -1815,7 +1920,7 @@ classdef Receiver_Commons <  matlab.mixin.Copyable
                 else
                     % Use coordinates from coo files
                     % If they exist
-                    coo_path = recs(baseline_ids(b, 1)).parent.getCooOutPath();
+                    coo_path = recs(baseline_ids(b, 1)).getCooOutPath();
                     if exist(coo_path, 'file') == 2
                         coo_ref = Coordinates.fromCooFile(coo_path);
                         flag_ready = true;
@@ -1824,7 +1929,7 @@ classdef Receiver_Commons <  matlab.mixin.Copyable
                         coo_ref = Coordinates();
                     end
                     
-                    coo_path = recs(baseline_ids(b, 2)).parent.getCooOutPath();
+                    coo_path = recs(baseline_ids(b, 2)).getCooOutPath();
                     if exist(coo_path, 'file') == 2
                         coo_trg = Coordinates.fromCooFile(coo_path);
                     else
@@ -1911,7 +2016,7 @@ classdef Receiver_Commons <  matlab.mixin.Copyable
                         else
                             % Use coordinates from coo files
                             % If they exist
-                            coo_path = rec.parent.getCooOutPath();
+                            coo_path = rec.getPos.getCooOutPath();
                             if exist(coo_path, 'file') == 2
                                 coo = Coordinates.fromCooFile(coo_path);
                             else
@@ -1980,7 +2085,7 @@ classdef Receiver_Commons <  matlab.mixin.Copyable
                         else
                             % Use coordinates from coo files
                             % If they exist
-                            coo_path = rec.parent.getCooOutPath();
+                            coo_path = rec.getPos.getCooOutPath();
                             if exist(coo_path, 'file') == 2
                                 coo = Coordinates.fromCooFile(coo_path);
                             else
@@ -2046,7 +2151,7 @@ classdef Receiver_Commons <  matlab.mixin.Copyable
                         else
                             % Use coordinates from coo files
                             % If they exist
-                            coo_path = rec.parent.getCooOutPath();
+                            coo_path = rec.getPos.getCooOutPath();
                             if exist(coo_path, 'file') == 2
                                 coo = Coordinates.fromCooFile(coo_path);
                             else
@@ -2326,7 +2431,7 @@ classdef Receiver_Commons <  matlab.mixin.Copyable
             else
                 f = figure; f.Name = sprintf('%03d: AniZtd', f.Number); f.NumberTitle = 'off';
                 fh_list = [fh_list; f];
-                fig_name = sprintf('ZTD_Slant_ANI_%s_%s', rec.parent.getMarkerName4Ch, rec.time.first.toString('yyyymmdd_HHMM'));
+                fig_name = sprintf('ZTD_Slant_ANI_%s_%s', this.parent.getMarkerName4Ch, this.time.first.toString('yyyymmdd_HHMM'));
                 f.UserData = struct('fig_name', fig_name);
                 
                 if nargin >= 3
@@ -2529,7 +2634,7 @@ classdef Receiver_Commons <  matlab.mixin.Copyable
             fh_list = [];
             rec = this;
             if isempty(rec)
-                this(1).log.addWarning('ZTD and/or slants have not been computed');
+                Core.getLogger.addWarning('ZTD and/or slants have not been computed');
             else
                 cc = this.getCC;
                 f = figure('Visible', 'off'); f.Name = sprintf('%03d: %s Slant %s', f.Number, this.parent.getMarkerName4Ch, cc.sys_c); f.NumberTitle = 'off';

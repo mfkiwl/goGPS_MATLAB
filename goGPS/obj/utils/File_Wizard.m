@@ -78,7 +78,7 @@ classdef File_Wizard < handle
         end
         
         function [status] = conjureResource(this, resource_name, date_start, date_stop, center_name, flag_check)
-            % Conjure the desired resource givengthe desired center
+            % Conjure the desired resource giveng the desired center
             % and the times bounds
             %
             % SYNTAX: 

@@ -77,7 +77,8 @@ classdef Command_Interpreter < handle
         CMD_AZEL        % Compute (or update) Azimuth and Elevation
         CMD_MASK        % Apply a mask to a set of observations
         CMD_BASICPP     % Basic Point positioning with no correction (useful to compute azimuth and elevation)
-        CMD_FIX_POS     % Fix (position) of a receiver
+        CMD_FIXPOS      % Fix (position) of a receiver
+        CMD_SETREF      % Set a receiver of a netwiork as the reference with fixed coordinates
         CMD_PREPRO      % Pre-processing command
         CMD_CODEPP      % Code point positioning
         CMD_PPP         % Precise point positioning
@@ -130,6 +131,8 @@ classdef Command_Interpreter < handle
 
         PAR_SLAVE       % number of parallel slaves to request
         
+        PAR_R_COO       % Parameter to indicate an array of 3 float
+        PAR_R_REM_ORPHANS % flag to remove coordinates without reference master receiver
         PAR_R_FROM_OUT  % Parameter to indicate to get data from Receiver Out
         PAR_R_FROM_WORK % Parameter to indicate to get data from Receiver Out
         
@@ -207,6 +210,7 @@ classdef Command_Interpreter < handle
         PAR_E_TROPO_HN  % Tropo export Parameter hn format
 
         PAR_E_COO_TXT   % Coordinates in goGPS coo format
+        PAR_E_COO_BRN   % Coordinates in goGPS Bernese CRD + OUT format
         PAR_E_COO_CRD   % Coordinates in goGPS crd format
         PAR_E_XYZ_TXT   % Coordinates XYZ in plain text format
         PAR_E_ENU_TXT   % Coordinates ENU in plain text format
@@ -216,7 +220,7 @@ classdef Command_Interpreter < handle
         PAR_S_SAVE      % flage for saving                
                 
         KEY_LIST = {'FOR', 'PAR', 'END'};
-        CMD_LIST = {'SET', 'PINIT', 'PKILL', 'LOAD', 'RENAME', 'EMPTY', 'EMPTYWORK', 'EMPTYOUT', 'AZEL', 'MASK', 'BASICPP', 'PREPRO', 'OUTDET', 'FIX_POS', 'CODEPP', 'PPP', 'NET', 'SEID', 'SID', 'REMIONO', 'MPEST', 'KEEP', 'SYNC', 'SHOW', 'CHKTROPO', 'VALIDATE', 'EXPORT', 'PUSHOUT', 'REMSAT', 'REMOBS', 'REMTMP', 'SENDMSG'};
+        CMD_LIST = {'SET', 'PINIT', 'PKILL', 'LOAD', 'RENAME', 'EMPTY', 'EMPTYWORK', 'EMPTYOUT', 'AZEL', 'MASK', 'BASICPP', 'PREPRO', 'OUTDET', 'FIXPOS', 'SETREF', 'CODEPP', 'PPP', 'NET', 'SEID', 'SID', 'REMIONO', 'MPEST', 'KEEP', 'SYNC', 'SHOW', 'CHKTROPO', 'VALIDATE', 'EXPORT', 'PUSHOUT', 'REMSAT', 'REMOBS', 'REMTMP', 'SENDMSG'};
         PUSH_LIST = {'PPP','NET','CODEPP','AZEL'};
         VALID_CMD = {};
         CMD_ID = [];
@@ -401,7 +405,7 @@ classdef Command_Interpreter < handle
             this.PAR_M_UNCOMBINED.accepted_values = [];
 
             this.PAR_M_FREE_NET.name = 'Free network';
-            this.PAR_M_FREE_NET.descr = '--free             Let the network free';
+            this.PAR_M_FREE_NET.descr = '--free             (flag) let the network free';
             this.PAR_M_FREE_NET.par = '(-f)(--free)|(--FREE)';
             this.PAR_M_FREE_NET.class = '';
             this.PAR_M_FREE_NET.limits = [];
@@ -422,6 +426,20 @@ classdef Command_Interpreter < handle
             this.PAR_M_SEID_PLANE.accepted_values = [];
             
             % Receiver parameter
+            
+            this.PAR_R_COO.name = 'Coordinate';
+            this.PAR_R_COO.descr = '[X Y Z]            Let the network free';
+            this.PAR_R_COO.par = '(?<=(\[))[0-9\. ]*(?=\])';
+            this.PAR_R_COO.class = '';
+            this.PAR_R_COO.limits = [];
+            this.PAR_R_COO.accepted_values = [];
+            
+            this.PAR_R_REM_ORPHANS.name = 'Rem orphans';
+            this.PAR_R_REM_ORPHANS.descr = '--ro               (flag) orphans (coordinates without the reference ricever)';
+            this.PAR_R_REM_ORPHANS.par = '(--ro)';
+            this.PAR_R_REM_ORPHANS.class = '';
+            this.PAR_R_REM_ORPHANS.limits = [];
+            this.PAR_R_REM_ORPHANS.accepted_values = [];
             
             this.PAR_R_FROM_OUT.name = 'From OUT';
             this.PAR_R_FROM_OUT.descr = 'FROM_OUT           (flag) use data from Receiver Output object';
@@ -872,6 +890,13 @@ classdef Command_Interpreter < handle
             this.PAR_E_COO_TXT.limits = [];
             this.PAR_E_COO_TXT.accepted_values = {};
             
+            this.PAR_E_COO_BRN.name = 'Stored coordinates Bernese format';
+            this.PAR_E_COO_BRN.descr = 'COO_BRN            Coordinates .CRD + .OUT file (one per receiver)';
+            this.PAR_E_COO_BRN.par = '(coo_brn)|(COO_BRN)';
+            this.PAR_E_COO_BRN.class = '';
+            this.PAR_E_COO_BRN.limits = [];
+            this.PAR_E_COO_BRN.accepted_values = {};
+            
             this.PAR_E_XYZ_TXT.name = 'Coordinates XYZ in plain text format';
             this.PAR_E_XYZ_TXT.descr = 'XYZ_TXT            Coordinates XYZ in plain text format';
             this.PAR_E_XYZ_TXT.par = '(xyz_txt)|(XYZ_TXT)';
@@ -963,10 +988,15 @@ classdef Command_Interpreter < handle
             this.CMD_CODEPP.rec = 'T';
             this.CMD_CODEPP.par = [this.PAR_SS];
 
-            this.CMD_FIX_POS.name = {'FIXPOS', 'fixpos'};
-            this.CMD_FIX_POS.descr = 'Fix position';
-            this.CMD_FIX_POS.rec = 'T';
-            this.CMD_FIX_POS.par = [this.PAR_R_FROM_WORK this.PAR_R_FROM_OUT this.PAR_R_FIX_APR];
+            this.CMD_FIXPOS.name = {'FIXPOS', 'fixpos'};
+            this.CMD_FIXPOS.descr = 'Fix position';
+            this.CMD_FIXPOS.rec = 'T';
+            this.CMD_FIXPOS.par = [this.PAR_R_FROM_WORK this.PAR_R_FROM_OUT this.PAR_R_FIX_APR];
+
+            this.CMD_SETREF.name = {'SETREF', 'setref'};
+            this.CMD_SETREF.descr = 'Change reference receiver with fixed position in a network (acts on out obj only)';
+            this.CMD_SETREF.rec = 'TR';
+            this.CMD_SETREF.par = [this.PAR_R_COO this.PAR_R_REM_ORPHANS];
 
             this.CMD_PPP.name = {'PPP', 'precise_point_positioning'};
             this.CMD_PPP.descr = 'Precise Point Positioning using carrier phase observations';
@@ -1038,7 +1068,7 @@ classdef Command_Interpreter < handle
             this.CMD_EXPORT.name = {'EXPORT', 'export'};
             this.CMD_EXPORT.descr = 'Export';
             this.CMD_EXPORT.rec = 'T';
-            this.CMD_EXPORT.par = [this.PAR_E_CORE_MAT this.PAR_E_PLAIN_MAT this.PAR_E_REC_MAT this.PAR_E_REC_RIN this.PAR_E_MP this.PAR_E_COO_CRD this.PAR_E_COO_TXT this.PAR_E_XYZ_TXT this.PAR_E_ENU_TXT  this.PAR_E_GEO_TXT this.PAR_E_TROPO_SNX this.PAR_E_TROPO_MAT this.PAR_E_TROPO_CSV this.PAR_E_TROPO_HN];
+            this.CMD_EXPORT.par = [this.PAR_E_CORE_MAT this.PAR_E_PLAIN_MAT this.PAR_E_REC_MAT this.PAR_E_REC_RIN this.PAR_E_MP this.PAR_E_COO_CRD this.PAR_E_COO_TXT this.PAR_E_COO_BRN this.PAR_E_XYZ_TXT this.PAR_E_ENU_TXT  this.PAR_E_GEO_TXT this.PAR_E_TROPO_SNX this.PAR_E_TROPO_MAT this.PAR_E_TROPO_CSV this.PAR_E_TROPO_HN];
             
             this.CMD_PUSHOUT.name = {'PUSHOUT', 'pushout'};
             this.CMD_PUSHOUT.descr = ['Push results in output' new_line 'when used it disables automatic push'];
@@ -1305,7 +1335,9 @@ classdef Command_Interpreter < handle
                     
                     log.newLine();
                     log.addMarkedMessage(sprintf('%s Executing: %s', GPS_Time.now.toString('yyyy-mm-dd HH:MM:SS'), cmd_list{cur_line_id}));
-                    fprintf(sprintf(' ** %s Executing: %s\n', GPS_Time.now.toString('yyyy-mm-dd HH:MM:SS'), cmd_list{cur_line_id})); % write the command in console too
+                    if log.isGUIOut
+                        fprintf(sprintf(' ** %s Executing: %s\n', GPS_Time.now.toString('yyyy-mm-dd HH:MM:SS'), cmd_list{cur_line_id})); % write the command in console too
+                    end
                     t1 = tic;
                     log.simpleSeparator([], [0.4 0.4 0.4]);
                     
@@ -1492,8 +1524,10 @@ classdef Command_Interpreter < handle
                                         this.runPushOut(core.rec, tok);
                                     case this.CMD_LOAD.name                 % LOAD
                                         this.runLoad(core.rec, tok(2:end));
-                                    case this.CMD_FIX_POS.name              % FIX POS
+                                    case this.CMD_FIXPOS.name              % FIX POS
                                         this.runFixPos(core.rec, tok(2:end));
+                                   case this.CMD_SETREF.name               % SET REF
+                                        this.runSetRef(core.rec, tok(2:end));
                                     case this.CMD_MPEST.name                % CMD_MPEST
                                         this.runMPEst(core.rec, tok(2:end));
                                 end
@@ -1577,11 +1611,11 @@ classdef Command_Interpreter < handle
                             tb = Telebot();
                             msg = strrep(tok{t}(2:end-1), this.SUB_KEY, ' ');
                             if any(msg == '$') % a key might be present
-                                msg = strrep(msg, '${PRJ_NAME}', Core.getState.getPrjName);
+                                msg = strrep(msg, '${PRJ_NAME}', ['<b>' Core.getState.getPrjName '</b>']);
                                 msg = strrep(msg, '${SSS_ID}', sprintf('%d/%d', Core.getCurrentSession, Core.getState.getSessionCount));
                                 msg = strrep(msg, '${SSS_INTERVAL}', sprintf('from %s to %s', Core.getState.getSessionLimits.first.toString('yyyy/mm/dd HH:MM'), Core.getState.getSessionLimits.last.toString('yyyy/mm/dd HH:MM')));
                             end
-                            tb.sendText(telebot_chat_id, msg, 'md');
+                            tb.sendText(telebot_chat_id, msg, 'html');
                         elseif ~isempty(telebot_chat_id)
                             log = Core.getLogger;
                             log.addError(sprintf('Telegram bot is available in the GReD version only\nI cannot send message "%s"', strrep(tok{t}(2:end-1), this.SUB_KEY, ' ')));
@@ -1618,6 +1652,7 @@ classdef Command_Interpreter < handle
                 par = strrep(par, '''', '');
                 if ~isempty(par)                    
                     % Try to modify par into state
+                    full_tok{p} = strrep(full_tok{p}, '${PRJ_NAME}', strrep(Core.getState.getPrjName,' ', '_'));
                     value = Ini_Manager.str2value(strrep(full_tok{p},'''', '"'));
                     err_code = state.set(par, value);
                     if ~err_code
@@ -1881,6 +1916,58 @@ classdef Command_Interpreter < handle
                     end
                 end
                 
+            end
+        end
+        
+        function runSetRef(this, rec, tok)
+            % Execute Set res
+            %
+            % INPUT
+            %   rec     list of rec objects
+            %   tok     list of tokens(parameters) from command line (cell array)
+            %
+            % SYNTAX
+            %   this.runSetRef(rec, tok)
+            
+            [id_trg, found] = this.getMatchingRec(rec, tok, 'T');
+            log = Core.getLogger;
+            if ~found
+                log.addWarning('No target found -> nothing to do');
+            else
+                [id_ref, found_ref] = this.getMatchingRec(rec, tok, 'R');
+                if ~found_ref
+                    log.addWarning('No reference found -> nothing to do');
+                else
+                    coo = Coordinates;
+                    for r = id_trg
+                        try
+                            coo(r) = rec(r).out.coo; % get link to coo
+                        catch
+                            coo(r) = Coordinates;
+                        end
+                    end
+                    % Get new coordinates
+                    try
+                        xyz = str2num(regexp(sprintf('%s ', tok{:}), this.PAR_R_COO.par, 'match', 'once'));
+                        if numel(xyz) ~=3
+                            xyz = [];
+                        end
+                    catch
+                        xyz = [];
+                    end
+                    if not(isempty(xyz))
+                        try
+                            coo_name = rec(id_ref).out.coo.name;
+                        catch
+                            coo_name = rec(id_ref).getMarkerName4Ch;
+                        end
+                        log.addMessage(log.indent(sprintf('New coordinates for %s : [ %s]', coo_name, sprintf('%s ', xyz))));
+                    end
+                    keep_orphans = isempty(regexp(sprintf('%s ', tok{:}), this.PAR_R_REM_ORPHANS.par, 'match', 'once'));
+                    [~, id_new_ref] = intersect(id_trg, id_ref);
+                    coo.setNewRef(id_new_ref, xyz, keep_orphans);
+                    log.addMarkedMessage(sprintf('Reference set to "%s"', coo_name));
+                end
             end
         end
         
@@ -2165,6 +2252,17 @@ classdef Command_Interpreter < handle
                        id_trg(i) = [];
                     end
                 end
+                id_rover = setdiff(id_trg, id_ref);
+                works = [rec(id_rover).work];
+                % If the network start, the flag of the a-priori coordinate of a rover should not be fixed
+                % Even if it was fixed during pre-processing
+                for w = 1 : numel(works)
+                    if isempty(works(w).coo)
+                        works(w).coo = works(w).getPos;
+                    end
+                    works(w).coo.info.coo_type(:) = 'G';
+                end
+                
                 if numel(id_trg) <= 1
                     log.addError('A network adjustment cannot be completed with less than 2 receivers');
                 else
@@ -2939,7 +3037,7 @@ classdef Command_Interpreter < handle
                         Core_Utils.exportFig(fh, file_path, Go_Settings.getInstance.getGUIModeExport);
                         if Core.isGReD && ~isempty(telebot_chat_id)
                             tb = Telebot();
-                            tb.sendImage(telebot_chat_id, file_path, file_name, '');
+                            tb.sendImage(telebot_chat_id, file_path, sprintf('<b>%s</b>\n%s', Core.getState.getPrjName, file_name), 'html');
                         elseif ~isempty(telebot_chat_id)
                             log = Core.getLogger;
                             log.addError(sprintf('Telegram bot is available in the GReD version only\nI cannot send image "%s"', file_name));
@@ -3082,6 +3180,13 @@ classdef Command_Interpreter < handle
                         rec.exportAppendedCoo('out');
                     else % run in single session mode (work)
                         rec.exportAppendedCoo('work');
+                    end
+                    flag_crd = flag_crd + 1;
+                elseif ~isempty(regexp(tok{t}, ['^(' this.PAR_E_COO_BRN.par ')*$'], 'once'))
+                    if sss_lev == 0 % run on all the results (out)
+                        rec.exportAppendedBernyCoo('out');
+                    else % run in single session mode (work)
+                        rec.exportAppendedBernyCoo('work');
                     end
                     flag_crd = flag_crd + 1;
                 elseif ~isempty(regexp(tok{t}, ['^(' this.PAR_E_XYZ_TXT.par ')*$'], 'once'))
@@ -3511,7 +3616,7 @@ classdef Command_Interpreter < handle
                         end
                         if numel(tok) < (1 + numel(cmd.rec))
                             err = this.ERR_NEI; % not enough input parameters
-                        elseif ~flag_multiple_par && (numel(tok) > (1 + numel(cmd.rec) + numel(cmd.par) + numel(cmd.key)) && ~strcmp(cmd.name{1}, 'RENAME'))
+                        elseif ~flag_multiple_par && (numel(tok) > (1 + numel(cmd.rec) + numel(cmd.par) + numel(cmd.key)) && ~strcmp(cmd.name{1}, 'RENAME') && ~strcmp(cmd.name{1}, 'SETREF'))
                             err = this.WRN_TMI; % too many input parameters
                         end
                     end

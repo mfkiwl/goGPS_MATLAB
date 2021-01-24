@@ -304,11 +304,9 @@ classdef Core_Sky < handle
             if nargin > 1
                 this.clearCoord(gps_date);
                 this.clearClock(gps_date);
-                this.clearSunMoon();
             else
                 this.clearCoord();
                 this.clearClock();
-                this.clearSunMoon();
             end
         end
         
@@ -323,7 +321,7 @@ classdef Core_Sky < handle
                     this.coord_pol_coeff_apc = []; %!!! the coefficient have to been recomputed
                     this.coord_pol_coeff_com = []; %!!! the coefficient have to been recomputed
                     
-                    % deleate also sun e moon data
+                    % delete also sun e moon data
                     if not(isempty(this.X_sun))
                         this.X_sun(1:n_ep,:)=[];
                     end
@@ -332,13 +330,17 @@ classdef Core_Sky < handle
                     end
                     this.sun_pol_coeff = []; %!!! the coefficient have to been recomputed
                     this.moon_pol_coeff = []; %!!! the coefficient have to been recomputed
-                    
                 end
             else
-                this.coord=[];
+                this.coord = [];
                 this.time_ref_coord = [];
                 this.coord_pol_coeff_apc = [];
                 this.coord_pol_coeff_com = [];
+                
+                this.X_sun = [];
+                this.X_moon = [];
+                this.sun_pol_coeff = [];
+                this.moon_pol_coeff = [];
             end
         end
         
@@ -350,8 +352,6 @@ classdef Core_Sky < handle
                     n_ep = min(floor((gps_date - this.time_ref_clock)/this.clock_rate), size(this.clock,1));
                     this.clock(1:n_ep,:)=[];
                     this.time_ref_clock.addSeconds(n_ep*this.clock_rate);
-                    
-                    
                 end
             else
                 this.clock=[];
@@ -372,11 +372,12 @@ classdef Core_Sky < handle
                     this.sun_pol_coeff = []; %!!! the coefficient have to been recomputed
                     this.moon_pol_coeff = []; %!!! the coefficient have to been recomputed
                 end
+            else
+                this.X_sun = [];
+                this.X_moon = [];
+                this.sun_pol_coeff = [];
+                this.moon_pol_coeff = [];
             end
-            this.X_sun = [];
-            this.X_moon = [];
-            this.sun_pol_coeff = [];
-            this.moon_pol_coeff = [];
         end
         
         function clearPolyCoeff(this)
@@ -1932,7 +1933,7 @@ classdef Core_Sky < handle
             % supposing SP3_time regularly sampled
             t_diff = gps_time.getRefTime(this.time_ref_coord.getMatlabTime);
 
-            p = round(t_diff / interval) + 1;
+            p = round((t_diff / interval)+eps(t_diff / interval)) + 1;
             
             b = (p-1)*interval - t_diff;
                         
@@ -1948,6 +1949,7 @@ classdef Core_Sky < handle
             A = sparse(rows(idx),A_idx(idx),A(idx),n_obs,n_par);
             idx_empty = sum(A~=0,1) == 0;
             A(:,idx_empty) = [];
+            n_par = size(A,2);
             N = A'*A + eye(n_par)*0.001;
             n_coord = size(this.coord,1);
             for s = 1 : length(go_ids)

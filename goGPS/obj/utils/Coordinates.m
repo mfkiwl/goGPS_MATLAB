@@ -58,16 +58,27 @@ classdef Coordinates < Exportable & handle
         
         DEG2RAD = pi/180;           % Convert degree to radius
         RAD2DEG = 180/pi;           % Convert radius to degree
+        
+        VERSION = '1.5';            % New file version
+                                    % 1.1 => adding s0_ip
+                                    % 1.2 => adding observation rate
+                                    % 1.3 => adding coo_type (fixed / non fixed)
+                                    % 1.4 => adding master_name (name of the master station used as reference, one per epoch)
+                                    % 1.5 => adding rate in header
     end
-    
+   
     properties (SetAccess = public, GetAccess = public) % set permission have been changed from private to public (Giulio)
         name = ''                   % Name of the point (not yet used extensively)
+        description = ''            % Point description
+        
         time = GPS_Time             % Position time
         xyz = []                    % Coordinates are stored in meters in as cartesian XYZ ECEF [m]
         v_xyz = []                  % Coordinates velocities XYZ ECEF  [m / year]
         precision = 0.0001          % 3D limit [m] to check the equivalence among coordinates
         Cxx = [] 
-        info = struct('n_epo', [], 'n_obs', [], 's0', [], 'flag', [], 'fixing_ratio', [],'obs_used',[]) % Additional info related to the coordinate in use
+        info = struct('n_epo', [], 'n_obs', [], 's0', [], 's0_ip', [], 'flag', [], 'fixing_ratio', [],'obs_used',[], 'rate', [], 'coo_type', '', 'master_name', categorical()) % Additional info related to the coordinate in use
+        
+        rate = [];                  % coordinates rate: - default daily
         std_scaling_factor = 30;
     end
         
@@ -96,6 +107,12 @@ classdef Coordinates < Exportable & handle
             catch
                 this.v_xyz = [];
             end
+            try % legacy support
+                this.info = pos.info;
+            catch
+                this.info = struct('n_epo', [], 'n_obs', [], 's0', [], 's0_ip', [], 'flag', [], 'fixing_ratio', [],'obs_used',[], 'rate', [], 'coo_type', '', 'master_name', categorical()); % Additional info related to the coordinate in use
+            end
+            
         end
         
         function copy = getCopy(this)
@@ -107,22 +124,92 @@ classdef Coordinates < Exportable & handle
             copy.copyFrom(this);
         end
         
+        function this = sort(this)
+            % Sort the coordinates in ascending time
+            %
+            % SYNTEX
+            %   this = sort(this)
+            
+            [id_sort] = this.time.sort();
+            if not(issorted(id_sort))
+                this.xyz = this.xyz(id_sort, :);
+                
+                if ~isempty(this.Cxx)
+                    this.Cxx = this.Cxx(:, :, id_sort);
+                end
+                
+                % Number of epocs
+                if not(isempty(this.info.n_epo))
+                    this.info.n_epo = this.info.n_epo(id_sort);
+                end
+                
+                % Number of observations
+                if not(isempty(this.info.n_obs))
+                    this.info.n_obs = this.info.n_obs(id_sort);
+                end
+                
+                % Sigma0 of the solution
+                if not(isempty(this.info.s0))
+                    this.info.s0 = this.info.s0(id_sort);
+                end
+                
+                % Sigma0 of the initial (pre-processing) solution
+                if not(isempty(this.info.s0_ip))
+                    this.info.s0_ip(id_sort) = this.info.s0_ip(id_sort);
+                end
+                
+                % Validity flag
+                if not(isempty(this.info.flag))
+                    this.info.flag(id_sort) = this.info.flag(id_sort);
+                end
+                
+                % Fixing ratio
+                if not(isempty(this.info.fixing_ratio))
+                    this.info.fixing_ratio(id_sort) = this.info.fixing_ratio(id_sort);
+                end
+                
+                % Encyclopedia
+                if not(isempty(this.info.obs_used))
+                    this.info.obs_used(id_sort) = this.info.obs_used(id_sort);
+                end
+                
+                % Rate of the original observations
+                if not(isempty(this.info.rate))
+                    this.info.rate(id_sort) = this.info.rate(id_sort);
+                end
+                
+                % Coordinate type (Bernese style: F: fixed / G: rover)
+                if not(isempty(this.info.coo_type))
+                    this.info.coo_type(id_sort) = char(this.info.coo_type(id_sort));
+                end
+                
+                % Rate of the original observations
+                if not(isempty(this.info.master_name))
+                    this.info.master_name(id_sort) = this.info.master_name(id_sort);
+                 end
+            end
+        end
+        
         function this = append(this, pos)
             % Append a Coordinates object into the this
             %
             % SYNTAX
             %   this = append(this, pos)
             
-            if not(isempty(pos))
+            if not(isempty(pos)) && not(pos.isEmpty)
+                this.time.append(pos.time);
                 this.xyz = [this.xyz; pos.xyz];
                 n_epo = size(this.xyz, 1);
                 
-                if ~isempty(this.Cxx) && ~isempty(pos.Cxx)
-                    this.Cxx = cat(3,this.Cxx, pos.Cxx);
+                if ~isempty(pos.Cxx)
+                    this.Cxx = cat(3, this.Cxx, pos.Cxx);
                 else
-                    this.Cxx(:,:,n_epo) = nan(3,3);
+                    if isempty(this.Cxx)
+                        this.Cxx = nan(3,3,1);
+                    else
+                        this.Cxx(:,:,n_epo) = nan(3,3);
+                    end
                 end
-                this.time.append(pos.time);
                 
                 % Number of epocs
                 if not(isempty(pos.info.n_epo))
@@ -145,6 +232,13 @@ classdef Coordinates < Exportable & handle
                     this.info.s0(n_epo) = nan;
                 end
                 
+                % Sigma0 of the initial (pre-processing) solution
+                if not(isempty(pos.info.s0_ip))
+                    this.info.s0_ip(n_epo) = pos.info.s0_ip;
+                else
+                    this.info.s0_ip(n_epo) = nan;
+                end
+                
                 % Validity flag
                 if not(isempty(pos.info.flag))
                     this.info.flag(n_epo) = pos.info.flag;
@@ -158,13 +252,45 @@ classdef Coordinates < Exportable & handle
                 else
                     this.info.fixing_ratio(n_epo) = nan;
                 end
+                
                 % Encyclopedia
                 if not(isempty(pos.info.obs_used))
                     this.info.obs_used(n_epo) = pos.info.obs_used;
                 else
                     this.info.obs_used(n_epo) = nan;
                 end
+                
+                % Rate of the original observations
+                if not(isempty(pos.info.rate))
+                    this.info.rate(n_epo) = pos.info.rate;
+                else
+                    this.info.rate(n_epo) = nan;
+                end
+                
+                % Coordinate type (Bernese style: F: fixed / G: rover)
+                if not(isempty(pos.info.coo_type))
+                    this.info.coo_type(n_epo) = char(pos.info.coo_type);
+                else
+                    this.info.coo_type(n_epo) = 'U';
+                end
+                
+                % Rate of the original observations
+                if not(isempty(pos.info.master_name))
+                    if ischar(pos.info.master_name)
+                        % This should not appen but now it's managed.... mmmm
+                        tmp_name = sprintf('%4s', pos.info.master_name);
+                        this.info.master_name(n_epo) = categorical({tmp_name(1:4)});
+                    else
+                        this.info.master_name(n_epo) = categorical(pos.info.master_name);
+                    end
+                else
+                    this.info.master_name(n_epo) = categorical({this.name});
+                end
+                
+                this.sort();
+                this.setRate(this.getRate()); % Update the rate if needed
             end
+            
         end
         
         function rem(this, idx)
@@ -176,6 +302,37 @@ classdef Coordinates < Exportable & handle
             if ~isempty(this.Cxx) 
                 this.Cxx(:,:,idx) = [];
             end
+            if ~isempty(this.v_xyz) 
+                this.v_xyz(idx,:) = [];
+            end
+            if ~isempty(this.info.n_epo)
+                this.info.n_epo(idx) = [];
+            end
+            if ~isempty(this.info.n_obs)
+                this.info.n_obs(idx) = [];
+            end
+            if ~isempty(this.info.s0)
+                this.info.s0(idx) = [];
+            end
+            if ~isempty(this.info.s0_ip)
+                this.info.s0_ip(idx) = [];
+            end
+            if ~isempty(this.info.flag)
+                this.info.flag(idx) = [];
+            end
+            if ~isempty(this.info.fixing_ratio)
+                this.info.fixing_ratio(idx) = [];
+            end
+            if ~isempty(this.info.rate)
+                this.info.rate(idx) = [];
+            end
+            if ~isempty(this.info.coo_type)
+                this.info.coo_type(idx) = '';
+            end
+            if ~isempty(this.info.master_name)
+                this.info.master_name(idx) = [];
+            end
+            
             this.time.remEpoch(idx);
         end
         
@@ -196,6 +353,23 @@ classdef Coordinates < Exportable & handle
     % =========================================================================
     
     methods
+        function [name, descr] = getName(this)
+            name = this.name;
+            % In legacy coordinate the field description was not present
+            try
+                descr = this.description;
+            catch
+                % use name instead
+                descr = name;
+            end
+            if isempty(name)
+                name = 'UNKN'; % Unknown name
+            end
+            if isempty(descr)
+                descr = name;
+            end
+        end
+        
         function time = getTime(this)
             % Get the time of the coordinates
             %
@@ -444,9 +618,11 @@ classdef Coordinates < Exportable & handle
             % SYNTAX
             %   cov_xyz = this.getStdXYZ()
             
-            std_xyz = nan(size(this.Cxx,3),3);
-            for i = 1 : size(this.Cxx,3)
-                std_xyz(i,:) = sqrt(diag(this.Cxx(:,:,i)));
+            std_xyz = nan(size(this.xyz,1),3);
+            if ~isempty(this.Cxx)
+                for i = 1 : size(this.Cxx,3)
+                    std_xyz(i,:) = sqrt(diag(this.Cxx(:,:,i)));
+                end
             end
         end
         
@@ -457,9 +633,11 @@ classdef Coordinates < Exportable & handle
             %   cov_enu = this.getStdENU()
             
             [~, rot_mat] = Coordinates.cart2loca(this.getMedianPos.getXYZ, [0 0 0]);
-            std_enu = nan(size(this.Cxx,3),3);
-            for i = 1 : size(this.Cxx,3)
-                std_enu(i,:) = sqrt(diag(rot_mat*this.Cxx(:,:,i)*rot_mat'));
+            std_enu = nan(size(this.xyz,1),3);
+            if ~isempty(this.Cxx)
+                for i = 1 : size(this.Cxx,3)
+                    std_enu(i,:) = sqrt(diag(rot_mat*this.Cxx(:,:,i)*rot_mat'));
+                end
             end
         end
         
@@ -516,6 +694,86 @@ classdef Coordinates < Exportable & handle
             Dsigma = B*sin_sigma*(cos_2sigmam + 1/4*B*(cos_sigma*(-1 + 2*cos_2sigmam^2) -B/6*cos_2sigmam*(-3 + 4 * sin_sigma^2)*(- 3 + 4 * cos_2sigmam^2)));
             dist = b*A*(sigma -Dsigma);            
         end
+        
+        function [lid_ko, time, lid_ko_enu, trend_enu] = getBadSession(coo_list, coo_ref, n_obs)
+            % Get outliers in East North Up coordinates
+            %
+            % SYNTAX
+            %   [lid_ko lid_ko_enu, trend_enu] = getBadSession(coo_list, coo_ref, n_obs);
+            %
+            % SEE ALSO
+            %   core.printKoSessions_experimental
+            
+            thr = 0.8;
+            time = {};
+            log = Core.getLogger();
+            fh = figure('Visible', 'off'); Core_UI.beautifyFig(fh);
+            for i = 1 : numel(coo_list)
+                pos = coo_list(i);
+                if ~pos.isEmpty
+                    
+                    if nargin == 1 || isempty(coo_ref)
+                        enu_diff = pos.getLocal(pos.getMedianPos) * 1e3;
+                        flag_time = true;
+                        if isa(pos.time, 'GPS_Time') && ~pos.time.isEmpty
+                            t = pos.time.getMatlabTime;
+                            if numel(t) < size(enu_diff,1)
+                                log.addWarning(sprintf('Coordinates are corrupted, it seems that there are more coordinates than times\n plotting only the positions with time'))
+                                enu_diff = enu_diff(1:numel(t),:);
+                            elseif numel(t) > size(enu_diff,1)
+                                log.addWarning(sprintf('Coordinates are corrupted, it seems that there are more times than coordinates\n plotting only the first positions'))
+                                t = t(1:size(enu_diff,1),:);
+                            end
+                        else
+                            flag_time = false;
+                            t = (1 : size(enu_diff, 1))';
+                        end
+                    elseif nargin > 1 % plot baseline
+                        enu_diff = [];
+                        if isa(pos.time, 'GPS_Time') && ~pos.time.isEmpty
+                            [t_comm, idx_1, idx2] = intersect(round(coo_ref.time.getRefTime(pos.time.first.getMatlabTime)),round(pos.time.getRefTime(pos.time.first.getMatlabTime)));
+                            t = pos.time.first.getMatlabTime + t_comm/86400;
+                            enu_diff = Coordinates.cart2local(median(coo_ref.xyz,1,'omitnan'),pos.xyz(idx2,:) - coo_ref.xyz(idx_1,:) )*1e3;
+                            flag_time = true;
+                        else
+                            if numel(coo_ref.xyz) == numel(pos.xyz)
+                                enu_diff = Coordinates.cart2local(median(coo_ref.xyz,1,'omitnan'),pos.xyz - coo_ref.xyz)*1e3;
+                                t = t(1:size(enu_diff,1),:);
+                                flag_time = false;
+                            else
+                                log.addError(sprintf('No time in coordinates and number off coordinates in ref different from coordinate in the second receiver'))
+                            end
+                        end
+                        enu_diff = bsxfun(@minus, enu_diff,median(enu_diff,1,'omitnan'));
+                    end
+                    
+                    if nargin >= 2 && n_obs > 0
+                        id_ok = (max(1, size(enu_diff,1) - n_obs + 1)) : size(enu_diff,1);
+                        enu_diff = enu_diff(id_ok, :);
+                        t = t(id_ok);
+                    end
+                    
+                    e = enu_diff(1:numel(t),1);
+                    [data, lid_ko_enu{i}(:,1), trend_enu{i}(:,1)] = strongFilterStaticData(e, 0.8, 7);
+                    
+                    n = enu_diff(:,2);
+                    [data, lid_ko_enu{i}(:,2), trend_enu{i}(:,1)] = strongFilterStaticData(n, 0.8, 7);
+                    
+                    up = enu_diff(:,3);
+                    [data, lid_ko_enu{i}(:,3), trend_enu{i}(:,1)] = strongFilterStaticData(up, 0.8, 7);
+                    
+                    lid_ko = isnan(e) | lid_ko_enu{i}(:,1) | isnan(n) | lid_ko_enu{i}(:,2) | isnan(up) | lid_ko_enu{i}(:,3);
+                    time{i} = t;
+                end
+            end
+            if numel(lid_ko) == 1
+                lid_ko = lid_ko{1};
+                lid_ko_enu = lid_ko_enu{1};
+                trend_enu = trend_enu{1};
+                time = time{1};
+            end
+        end
+
     end
     
     % =========================================================================
@@ -523,13 +781,20 @@ classdef Coordinates < Exportable & handle
     % =========================================================================
     
     methods
-        function setName(this, name)
+        function setName(this, name, description)
             % Set the name of the coordinates
             %
             % SYNTAX
             %   this.setName(time)
             
             this.name = name;
+            if nargin == 2
+                try
+                    this.description = description;
+                catch ex
+                    % this try catch is here only for legacy support of old missing description field
+                end
+            end
 
         end
         
@@ -552,7 +817,31 @@ classdef Coordinates < Exportable & handle
                 this.time.getEpoch(1 : size(this.xyz, 1));
                 fprintf('The set coordinates time is smaller than the number of positions stored\Cutting positions\nDebug from Coordinates.setTime()');                
             end
-
+            this.setRate(this.getRate);
+        end
+        
+        function rate = getRate(this)
+            % Get the rate of the coordinates
+            %
+            % SYNTAX:
+            %   rate = this.getRate
+            rate = this.rate;
+            
+            if (isempty(this.rate) ||  isnan(zero2nan(this.rate))) && (not(isempty(this.time)) && (this.time.length > 2))
+                rate = round(this.time.getRate, 3);
+                this.setRate(rate);
+            end
+        end
+        
+        function setRate(this, rate)
+            % Manually set the coordinate rate (do it carefully)
+            %
+            % SYNTAX
+            %   this.setRate(rate);
+            %
+            % EXAMPLE
+            %   this.setRate(Core.getState.sss_duration);
+            this.rate = rate;
         end
         
         function setPosXYZ(this, xyz, y, z)
@@ -680,7 +969,8 @@ classdef Coordinates < Exportable & handle
                 else
                     % Verify the file version (it should match 1.0):
                     id_ver = find(txt(lim(:,1) + 1) == 'F'); % +FileVersion
-                    file_ok = not(isempty(regexp(txt(lim(id_ver, 1):lim(id_ver, 2)), '(?<=FileVersion[ ]*: )1.0', 'once')));
+                    version_ok = not(isempty(regexp(txt(lim(id_ver, 1):lim(id_ver, 2)), ['(?<=FileVersion[ ]*: )' this.VERSION], 'once')));
+                    file_ok = not(isempty(regexp(txt(lim(id_ver, 1):lim(id_ver, 2)), '(?<=FileVersion[ ]*: )1.', 'once')));
                     
                     % Data should be present
                     timestamp = [];
@@ -709,10 +999,21 @@ classdef Coordinates < Exportable & handle
                             file_ok = false;
                         else
                             this.name = regexp(txt(lim(id_line, 1):lim(id_line, 2)), '(?<=MonitoringPoint[ ]*: ).*', 'match', 'once');
+                            this.description = regexp(txt(lim(id_line, 1):lim(id_line, 2)), '(?<=LongName[ ]*: ).*', 'match', 'once');
                         end
                         
+                        % DataRate
+                        id_line_rate = find(txt(lim(1:data_start-1,1) + 1) == 'D' & txt(lim(1:data_start-1,1) + 5) == 'R'); % +DateRate
+                        if not(isempty(id_line_rate))
+                            rate = str2double(regexp(txt(lim(id_line_rate,1) : lim(id_line_rate, 2)), '(?<=\:)[ 0-9\.]*', 'match', 'once'));
+                            if isnan(rate)
+                                id_line_rate = []; % force recomputation
+                            else
+                                this.setRate(rate);
+                            end
+                        end
                         % DataType
-                        id_line_start = find(txt(lim(1:data_start-1,1) + 1) == 'D' & txt(lim(1:data_start-1,1) + 5) == 'T'); % +MonitoringPoint
+                        id_line_start = find(txt(lim(1:data_start-1,1) + 1) == 'D' & txt(lim(1:data_start-1,1) + 5) == 'T'); % +DataType
                         id_line = id_line_start -1 + find(txt(lim(id_line_start:data_start-1,1) + 1) == '-');
                         col = str2num(txt(lim(id_line, 1) + repmat(2:3, numel(id_line),1))) + 1;
                         data_type = categorical();
@@ -732,7 +1033,7 @@ classdef Coordinates < Exportable & handle
                     if file_ok
                         this.xyz = nan(data_stop - data_start + 1, 3);
                         n_data = data_stop - data_start + 1;
-                        this.info = struct('n_epo', zeros(n_data, 1, 'uint32'), 'n_obs', zeros(n_data, 1, 'uint32'), 's0', zeros(n_data, 1, 'single'), 'flag', zeros(n_data, 1, 'uint8'), 'fixing_ratio', zeros(n_data, 1, 'single'));
+                        this.info = struct('n_epo', zeros(n_data, 1, 'uint32'), 'n_obs', zeros(n_data, 1, 'uint32'), 's0', zeros(n_data, 1, 'single'), 's0_ip', zeros(n_data, 1, 'single'), 'flag', zeros(n_data, 1, 'uint8'), 'fixing_ratio', zeros(n_data, 1, 'single'), 'rate', zeros(n_data, 1, 'single'), 'coo_type', char(ones(n_data, 1, 'uint8')) * 'U', 'master_name', repmat(categorical({'UNKN'}), n_data, 1));
                         this.Cxx = zeros(3, 3, n_data);
                         
                         id_cov = [col(data_type == categorical({'Cxx'})), ...
@@ -744,14 +1045,18 @@ classdef Coordinates < Exportable & handle
                         
                         id_n_epo = col(data_type == categorical({'nEpochs'}));
                         id_n_obs = col(data_type == categorical({'nObs'}));
+                        id_s0_ip = col(data_type == categorical({'initialSigma0'}));
+                        id_s0 = col(data_type == categorical({'sigma0'}));
                         id_fix = col(data_type == categorical({'fixingRatio'}));
+                        id_rate = col(data_type == categorical({'obsRate'}));
+                        id_ctype = col(data_type == categorical({'cooType'}));
+                        id_master = col(data_type == categorical({'masterName'}));
                         for l = 0 : (data_stop - data_start)
                             data_line = strsplit(txt(lim(data_start + l, 1) : lim(data_start + l, 2)), ';');
                             this.xyz(l + 1, 1) = str2double(data_line{data_col(1)});
                             this.xyz(l + 1, 2) = str2double(data_line{data_col(2)});
                             this.xyz(l + 1, 3) = str2double(data_line{data_col(3)});
                             
-                             
                             if numel(id_cov) == 6
                                 tmp = [str2num(data_line{id_cov(1)}), str2num(data_line{id_cov(2)}), str2num(data_line{id_cov(3)}); ...
                                     str2num(data_line{id_cov(2)}), str2num(data_line{id_cov(4)}), str2num(data_line{id_cov(5)}); ...
@@ -767,15 +1072,64 @@ classdef Coordinates < Exportable & handle
                             if any(id_n_obs)
                                 this.info.n_obs(l + 1) = uint32(str2double(data_line{id_n_obs}));
                             end
+                            if any(id_s0_ip)
+                                if id_s0_ip > numel(data_line)
+                                    this.info.s0_ip(l + 1) = nan;
+                                else
+                                    this.info.s0_ip(l + 1) = single(str2double(data_line{id_s0_ip}));
+                                end
+                            end
+                            if any(id_s0)
+                                if id_s0 > numel(data_line)
+                                    this.info.s0(l + 1) = nan;
+                                else
+                                    this.info.s0(l + 1) = single(str2double(data_line{id_s0}));
+                                end
+                            end
                             if any(id_fix)
-                                this.info.fixing_ratio(l + 1) = single(str2double(data_line{id_fix}));
+                                if id_fix > numel(data_line)
+                                    this.info.fixing_ratio(l + 1) = nan;
+                                else
+                                    this.info.fixing_ratio(l + 1) = single(str2double(data_line{id_fix}));
+                                end
+                            end
+                            if any(id_rate)
+                                if id_rate > numel(data_line)
+                                    this.info.rate(l + 1) = nan;
+                                else
+                                    this.info.rate(l + 1) = single(str2double(data_line{id_rate}));
+                                end
+                            end
+                            if any(id_ctype)
+                                if id_ctype > numel(data_line)
+                                    this.info.coo_type(l + 1) = 'U';
+                                else
+                                    this.info.coo_type(l + 1) = char(data_line{id_ctype});
+                                end
+                            end
+                            if any(id_master)
+                                if id_master > numel(data_line)
+                                    this.info.master_name(l + 1) = categorical({'UNKN'});
+                                else
+                                    this.info.master_name(l + 1) = categorical({data_line{id_master}});
+                                end
                             end
                         end
                         this.time = GPS_Time(timestamp);
+                        if isempty(id_line_rate)
+                            this.setRate(this.getRate);
+                        end
                     end
                     
                     % Check description field
                     % use the old one for the file
+                end
+                
+                if not(version_ok)
+                    % If the version is changed re-export the coordinates to update the file
+                    log = Core.getLogger();
+                    log.addMarkedMessage(sprintf('Update "%s" to the current Coordinates version %s', file_name, this.VERSION));
+                    this.exportAsCoo(file_name);
                 end
             else
                 log = Core.getLogger();
@@ -785,7 +1139,7 @@ classdef Coordinates < Exportable & handle
     end
     
     % =========================================================================
-    %    SHOWs
+    %    SHOW
     % =========================================================================
     
     methods (Access = 'public')
@@ -843,8 +1197,8 @@ classdef Coordinates < Exportable & handle
             thr = 0.8;
             flag_distr = false;
             
-            str_title{2} = sprintf('STD (detrended)');
-            str_title{3} = sprintf('STD (detrended)');
+            str_title{2} = sprintf('STD (vs smoothed signal)');
+            str_title{3} = sprintf('STD (vs smoothed signal)');
             log = Core.getLogger();
             for i = 1 : numel(coo_list)
                 pos = coo_list(i);
@@ -892,7 +1246,7 @@ classdef Coordinates < Exportable & handle
                         
                         pos_diff = [];
                         if isa(pos.time, 'GPS_Time') && ~pos.time.isEmpty
-                            rate = round(coo_ref.time.getRate);
+                            rate = coo_ref.getRate;
                             t_ref = (round((pos.time.first.getMatlabTime * 86400 - rate/2) / rate) * rate + rate/2) / 86400;
                             t1 = round(coo_ref.time.getRefTime(t_ref) / rate) * rate;
                             t2 = round(pos.time.getRefTime(t_ref) / rate) * rate;
@@ -921,6 +1275,7 @@ classdef Coordinates < Exportable & handle
                         else
                             if numel(coo_ref.xyz) == numel(pos.xyz)
                                 pos_diff = Coordinates.cart2local(median(coo_ref.xyz,1,'omitnan'),pos.xyz - coo_ref.xyz)*1e3;
+                                pos_std = [];
                                 t = t(1:size(pos_diff,1),:);
                                 flag_time = false;
                             else
@@ -931,6 +1286,9 @@ classdef Coordinates < Exportable & handle
                         pos_diff = bsxfun(@minus, pos_diff,median(pos_diff,1,'omitnan'));
                     end
                     
+                    if any(pos_std)
+                        pos_std(pos_std == 0) = 100e3; % no std => std set to 100m
+                    end
                     
                     fh = figure('Visible', 'off');
                     if flag_distr
@@ -972,18 +1330,23 @@ classdef Coordinates < Exportable & handle
                             % Plot confidence level
                             if any(pos_std(:))
                                 yyaxis right; ylabel('Formal std [mm]');
-                                patch([t(:); t(end); t(1)], [pos_std(:, c); 0; 0], color_order(c,:), 'FaceColor', color_order(c,:),'EdgeColor','none','FaceAlpha',0.1,'HandleVisibility','off'); hold on;
+                                Core_Utils.patchSep(t(:), pos_std(:, c), color_order(c,:), 'FaceColor', color_order(c,:),'EdgeColor','none','FaceAlpha',0.2,'HandleVisibility','off'); hold on;
                                 tmp_ax = gca;
                                 tmp_ax.YColor = min(1, color_order(c,:)+0.2);
-                                p = plot(t, pos_std(:, c), 'Color', [tmp_ax.YColor 0.2]);
-                                ylim([0 max(0.5, 4 * perc(pos_std(:),0.95))]);
+                                p = Core_Utils.plotSep(t, pos_std(:, c), '-', 'Color', [tmp_ax.YColor 0.3], 'zeros');
+                                ylim([0 min(1e2,max(0.5, 4 * perc(pos_std(:),0.8)))]);
                                 yyaxis left;
                             end
                             
                             if thr < 1
                                 pos_var = nan2zero(pos_std(:, c).^2);
                                 pos_var(pos_var == 0) = 100.^2; % 100 meters of std
-                                [data{c}, lid_ko, trend, data_smooth] = strongFilterStaticData([t data_component{c} pos_var], 0.8, 7);
+                                not_nan =  ~isnan(data_component{c});
+                                data_smooth =  nan(size(t));
+                                trend =  nan(size(t));
+                                lid_ko = true(size(t));
+                                data{c} = nan(size(data_component{c}));
+                                [data{c}(not_nan), lid_ko(not_nan), trend(not_nan), data_smooth(not_nan)] = strongFilterStaticData([t(not_nan) data_component{c}(not_nan) pos_var(not_nan)], 0.8, 7);
                                 setAxis(fh, c);
                                 
                                 % Plot all the data
@@ -993,7 +1356,9 @@ classdef Coordinates < Exportable & handle
                                 Core_Utils.plotSep(t, data{c}, '.-', 'MarkerSize', 15, 'LineWidth', 2, 'Color', color_order(c,:));
                                 
                                 % Plot smoothed signal
-                                plot(t, data_smooth, '.--', 'LineWidth', 1.5, 'Color', max(0, color_order(c,:)-0.2));
+                                if std(data_smooth) < 100
+                                    plot(t, data_smooth, '.--', 'LineWidth', 1.5, 'Color', max(0, color_order(c,:)-0.2));
+                                end
                             else
                                 data{c} = data_component{c};
                                 setAxis(fh, c);
@@ -1017,6 +1382,7 @@ classdef Coordinates < Exportable & handle
                             end
                             h = ylabel([axis_label{c} ' [mm]']); h.FontWeight = 'bold';
                             grid on;
+                            
                             str_title{c} = sprintf('%s %s%.2f', str_title{c}, iif(i>1, '- ', ''), std((data{c}(~lid_ko) - data_smooth(~lid_ko)), 'omitnan'));
                             h = title(str_title{c}, 'interpreter', 'none'); h.FontWeight = 'bold';
                         end     
@@ -1071,87 +1437,11 @@ classdef Coordinates < Exportable & handle
             
         end
 
-        function [lid_ko, time, lid_ko_enu, trend_enu] = getBadSession(coo_list, coo_ref, n_obs)
-            % Get outliers in East North Up coordinates
-            %
-            % SYNTAX 
-            %   [lid_ko lid_ko_enu, trend_enu] = getBadSession(coo_list, coo_ref, n_obs);
-            
-            thr = 0.8;
-            time = {};
-            log = Core.getLogger();
-            fh = figure('Visible', 'off'); Core_UI.beautifyFig(fh);
-            for i = 1 : numel(coo_list)
-                pos = coo_list(i);
-                if ~pos.isEmpty
-                    
-                    if nargin == 1 || isempty(coo_ref)
-                        enu_diff = pos.getLocal(pos.getMedianPos) * 1e3;
-                        flag_time = true;
-                        if isa(pos.time, 'GPS_Time') && ~pos.time.isEmpty
-                            t = pos.time.getMatlabTime;
-                            if numel(t) < size(enu_diff,1)
-                                log.addWarning(sprintf('Coordinates are corrupted, it seems that there are more coordinates than times\n plotting only the positions with time'))
-                                enu_diff = enu_diff(1:numel(t),:);
-                            elseif numel(t) > size(enu_diff,1)
-                                log.addWarning(sprintf('Coordinates are corrupted, it seems that there are more times than coordinates\n plotting only the first positions'))
-                                t = t(1:size(enu_diff,1),:);
-                            end
-                        else
-                            flag_time = false;
-                            t = (1 : size(enu_diff, 1))';
-                        end
-                    elseif nargin > 1 % plot baseline
-                        enu_diff = [];
-                        if isa(pos.time, 'GPS_Time') && ~pos.time.isEmpty
-                            [t_comm, idx_1, idx2] = intersect(round(coo_ref.time.getRefTime(pos.time.first.getMatlabTime)),round(pos.time.getRefTime(pos.time.first.getMatlabTime)));
-                            t = pos.time.first.getMatlabTime + t_comm/86400;
-                            enu_diff = Coordinates.cart2local(median(coo_ref.xyz,1,'omitnan'),pos.xyz(idx2,:) - coo_ref.xyz(idx_1,:) )*1e3;
-                            flag_time = true;
-                        else
-                            if numel(coo_ref.xyz) == numel(pos.xyz)
-                                enu_diff = Coordinates.cart2local(median(coo_ref.xyz,1,'omitnan'),pos.xyz - coo_ref.xyz)*1e3;
-                                t = t(1:size(enu_diff,1),:);
-                                flag_time = false;
-                            else
-                                log.addError(sprintf('No time in coordinates and number off coordinates in ref different from coordinate in the second receiver'))
-                            end
-                        end
-                        enu_diff = bsxfun(@minus, enu_diff,median(enu_diff,1,'omitnan'));
-                    end
-                    
-                    if nargin >= 2 && n_obs > 0
-                        id_ok = (max(1, size(enu_diff,1) - n_obs + 1)) : size(enu_diff,1);
-                        enu_diff = enu_diff(id_ok, :);
-                        t = t(id_ok);
-                    end
-                    
-                    e = enu_diff(1:numel(t),1);
-                    [data, lid_ko_enu{i}(:,1), trend_enu{i}(:,1)] = strongFilterStaticData(e, 0.8, 7);
-                    
-                    n = enu_diff(:,2);
-                    [data, lid_ko_enu{i}(:,2), trend_enu{i}(:,1)] = strongFilterStaticData(n, 0.8, 7);
-                    
-                    up = enu_diff(:,3);
-                    [data, lid_ko_enu{i}(:,3), trend_enu{i}(:,1)] = strongFilterStaticData(up, 0.8, 7);
-                    
-                    lid_ko = isnan(e) | lid_ko_enu{i}(:,1) | isnan(n) | lid_ko_enu{i}(:,2) | isnan(up) | lid_ko_enu{i}(:,3);
-                    time{i} = t;
-                end
-            end
-            if numel(lid_ko) == 1
-                lid_ko = lid_ko{1};
-                lid_ko_enu = lid_ko_enu{1};
-                trend_enu = trend_enu{1};
-                time = time{1};
-            end
-        end
-
         function fh = showCoordinatesENU(coo_list, coo_ref, n_obs)
             % Plot East North Up coordinates
             %
             % SYNTAX 
-            %   this.showCoordinatesENU(coo_list);
+            %   this.showCoordinatesENU(coo_list, coo_ref,n_obs);
             
             switch nargin
                 case 1, fh = showCoordinates('ENU', coo_list);
@@ -1172,7 +1462,7 @@ classdef Coordinates < Exportable & handle
             % Plot X Y Z coordinates
             %
             % SYNTAX
-            %   this.showCoordinatesXYZ(coo_list);
+            %   this.showCoordinatesXYZ(coo_list, coo_ref,n_obs);
             switch nargin
                 case 1, fh = showCoordinates('XYZ', coo_list);
                 case 2, fh = showCoordinates('XYZ', coo_list, coo_ref);
@@ -1233,15 +1523,15 @@ classdef Coordinates < Exportable & handle
                         end
                         enu_diff = bsxfun(@minus, enu_diff,median(enu_diff,1,'omitnan'));
                     end
+                    
                     if size(enu_diff, 1) > 1
-                        
                         if nargin >= 2 && n_obs > 0
                             id_ok = (max(1, size(enu_diff,1) - n_obs + 1)) : size(enu_diff,1);
                             enu_diff = enu_diff(id_ok, :);
                             t = t(id_ok);
                         end
-                        str_title{1} = sprintf('Position detrended planar Up [mm]\nSTD (detrended)');
-                        str_title{3} = sprintf('STD (detrended)');
+                        str_title{1} = sprintf('Position detrended planar Up [mm]\nSTD (vs smoothed signal)');
+                        str_title{3} = sprintf('STD (vs smoothed signal)');
                         fh = figure('Visible', 'off'); Core_UI.beautifyFig(fh);
                         if numel(coo_list) > 1
                             fh.Name = sprintf('%03d: dPUP MR', fh.Number); fh.NumberTitle = 'off';
@@ -1342,6 +1632,482 @@ classdef Coordinates < Exportable & handle
     end
     
     % =========================================================================
+    %    EXPORT
+    % =========================================================================
+   
+    methods (Access = 'public')
+        
+        function out_file_path = getOutPath(this, out_file_prefix)
+            % Get the path to ag eneriv coordinate file (noextension)
+            %
+            % SYNTAX
+            %   out_file_path = this.getOutPath(<out_file_prefix>)
+            
+            state = Core.getState();
+            if nargin < 2 || isempty(out_file_prefix)
+                out_file_prefix = strrep([state.getPrjName '_'], ' ', '_');
+            end
+            % Add the folder if not present
+            if sum(out_file_prefix == filesep) == 0
+                out_dir = state.getOutDir();
+                out_file_prefix = fullfile(out_dir, out_file_prefix);
+            end
+            out_file_path = strrep([out_file_prefix this.name], ' ', '_');
+        end
+        
+        function out_file_name = getCooOutPath(this, out_file_prefix)
+            % Get the path to the coordinate file
+            %
+            % SYNTAX
+            %   out_file_path = this.getCooOutPath(<out_file_prefix>)
+            
+            if (nargin == 2)
+                out_file_name = [this.getOutPath(out_file_prefix) '.coo'];
+            else
+                out_file_name = [this.getOutPath() '.coo'];
+            end
+        end
+
+        function exportAsCoo(this, out_file_name)
+            % Export as coo file (progressive appended file)
+            % Any new entry is inserted sorted in the file
+            %
+            % INPUT
+            %   out_file_name   full path of the filename (as default exported into outDir with the name of the coo)
+            %
+            % SYNTAX
+            %   coo.exportAsCoo(>out_file_name>)
+            
+            now_time = GPS_Time.now();
+            if nargin < 2 || isempty(out_file_name)
+                out_file_name = this.getCooOutPath();
+            end
+            log  = Logger.getInstance;
+            log.addMarkedMessage(sprintf('Updating coordinates to %s', out_file_name));
+            try
+                
+                if exist(out_file_name, 'file') == 2
+                    % Read and append
+                    [txt, lim] = Core_Utils.readTextFile(out_file_name, 3);
+                    if isempty(lim)
+                        file_ok = false;
+                        timestamp = [];
+                    else
+                        % Verify the file version (it should match 1.0):
+                        id_ver = find(txt(lim(:,1) + 1) == 'F'); % +FileVersion
+                        version_ok = not(isempty(regexp(txt(lim(id_ver, 1):lim(id_ver, 2)), ['(?<=FileVersion[ ]*: )' this.VERSION], 'once')));
+                        if not(version_ok)
+                            log = Logger.getInstance;
+                            log.addWarning(sprintf('"%s" is in an older format', out_file_name));
+                        end
+                        file_ok = not(isempty(regexp(txt(lim(id_ver, 1):lim(id_ver, 2)), '(?<=FileVersion[ ]*: )1.', 'once')));
+                        
+                        % Data should be present
+                        timestamp = [];
+                        if file_ok
+                            id_len_ok = find(lim(:,3)+1 >= 9);
+                            try
+                                data_start = id_len_ok(find(txt(lim(id_len_ok,1) + 9) == 't') + 1); % +DataStart
+                                id_len_ok = find(lim(:,3)+1 >= 8);
+                                data_stop = id_len_ok(find(txt(lim(id_len_ok,1) + 7) == 'd') -1); % +DataStop
+                                if isempty(data_stop)
+                                    data_stop = size(lim, 1);
+                                end
+                                if isempty(data_start)
+                                    file_ok = false;
+                                else
+                                    id_data = lim(data_start:data_stop,1);
+                                    % Read old timestamps
+                                    timestamp = datenum(txt(repmat(id_data, 1, 19) + repmat(0:18, numel(id_data), 1)), 'yyyy-mm-dd HH:MM:SS');
+                                end
+                            catch
+                                file_ok = false;
+                                timestamp = [];
+                            end
+                        else
+                            data_start = 0;
+                        end
+                        
+                        % Check description field
+                        % use the old one for the file
+                        if file_ok
+                            id_descr = find(txt(lim(:,1) + 4) == 'c'); % + Description
+                            if isempty(id_descr)
+                                file_ok = false;
+                            else
+                                str_tmp = sprintf('%s\n', txt(lim(id_descr,1):lim(id_descr,2))); % Keep the description of the old file
+                            end
+                        end
+                    end
+                else
+                    file_ok = false;
+                    timestamp = [];
+                end
+                
+                if not(file_ok)
+                    str_tmp = sprintf('+Description    : XYZ Position file generated on %s\n', now_time.toString('dd-mmm-yyyy HH:MM'));
+                end
+                [name, descr] = this.getName();
+                str_tmp = sprintf('%s+LastChange     : %s\n', str_tmp, now_time.toString('dd-mmm-yyyy HH:MM'));
+                str_tmp = sprintf('%s+Software       : goGPS\n', str_tmp);
+                str_tmp = sprintf('%s+Version        : %s\n', str_tmp, Core.GO_GPS_VERSION);
+                str_tmp = sprintf('%s+FileVersion    : %s\n', str_tmp, this.VERSION);
+                str_tmp = sprintf('%s+MonitoringPoint: %s\n', str_tmp, this.name);
+                str_tmp = sprintf('%s+LongName       : %s\n', str_tmp, this.description);
+                str_tmp = sprintf('%s+SensorType     : GNSS\n', str_tmp);
+                str_tmp = sprintf('%s+SensorName     : GNSS\n', str_tmp);
+                str_tmp = sprintf('%s+DataScale      : m\n', str_tmp);
+                str_tmp = sprintf('%s+DataScale Cov  : mm^2\n', str_tmp);
+                str_tmp = sprintf('%s+DataRate       : %f s\n', str_tmp, this.getRate);
+                str_tmp = sprintf('%s+DataType       :\n', str_tmp);
+                str_tmp = sprintf('%s -00            : timeStamp\n', str_tmp);
+                str_tmp = sprintf('%s -01            : exportTime\n', str_tmp);
+                str_tmp = sprintf('%s -02            : x\n', str_tmp);
+                str_tmp = sprintf('%s -03            : y\n', str_tmp);
+                str_tmp = sprintf('%s -04            : z\n', str_tmp);
+                str_tmp = sprintf('%s -05            : Cxx\n', str_tmp);
+                str_tmp = sprintf('%s -06            : Cyy\n', str_tmp);
+                str_tmp = sprintf('%s -07            : Czz\n', str_tmp);
+                str_tmp = sprintf('%s -08            : Cxy\n', str_tmp);
+                str_tmp = sprintf('%s -09            : Cxz\n', str_tmp);
+                str_tmp = sprintf('%s -10            : Cyz\n', str_tmp);
+                str_tmp = sprintf('%s -11            : nEpochs\n', str_tmp);
+                str_tmp = sprintf('%s -12            : nObs\n', str_tmp);
+                str_tmp = sprintf('%s -13            : initialSigma0\n', str_tmp);
+                str_tmp = sprintf('%s -14            : sigma0\n', str_tmp);
+                str_tmp = sprintf('%s -15            : fixingRatio\n', str_tmp);
+                str_tmp = sprintf('%s -16            : obsRate\n', str_tmp);
+                str_tmp = sprintf('%s -17            : cooType\n', str_tmp);
+                str_tmp = sprintf('%s -18            : masterName\n', str_tmp);
+                str_tmp = sprintf('%s+DataStart\n', str_tmp);
+                
+                % Append New
+                e = 1; % old epoch
+                [~, id_time] = sort(this.time.getMatlabTime);
+                for i = id_time(:)'
+                    cur_time = round(this.time.getEpoch(i).getMatlabTime*86400)/86400;
+                    while e <= numel(timestamp) && (cur_time - 1e-5 > timestamp(e))
+                        old_line = txt(lim(data_start + (e-1),1):lim(data_start + (e-1),2));
+                        str_tmp = sprintf('%s%s\n', str_tmp, old_line);
+                        e = e + 1;
+                    end
+                    try
+                        time = this.time.getEpoch(i).toString('yyyy-mm-dd HH:MM:SS');
+                        xyz = this.xyz(i,:);
+                        if isempty(this.Cxx)
+                            cov = zeros(3,3);
+                        else
+                            cov = this.Cxx(:,:,i)*1e6;
+                        end
+                        try
+                        n_epo = this.info.n_epo(i);
+                        catch
+                            n_epo = nan;
+                        end
+                        try
+                            n_obs = this.info.n_obs(i);
+                        catch
+                            n_obs = nan;
+                        end
+                        try
+                            fix_ratio = this.info.fixing_ratio(i);
+                        catch
+                            fix_ratio = nan;
+                        end
+                        try
+                            rate = this.info.rate(i);
+                        catch
+                            rate = nan;
+                        end
+                        try
+                            s0_ip = this.info.s0_ip(i);
+                        catch
+                            s0_ip = nan;
+                        end
+                        try
+                            s0 = this.info.s0(i);
+                        catch
+                            s0 = nan;
+                        end
+                        try
+                            coo_type = char(this.info.coo_type(i));
+                        catch
+                            coo_type = 'U';
+                        end
+                        try
+                            master_name = this.info.master_name(i);
+                        catch
+                            master_name = this.name;
+                        end
+                        str_tmp = sprintf('%s%s;%s;%.4f;%.4f;%.4f;%.4f;%.4f;%.4f;%.4f;%.4f;%.4f;%d;%d;%.3f;%.4f;%.2f;%d;%c;%s\n', str_tmp, time, now_time.toString('yyyy-mm-dd HH:MM:SS'), ...
+                            xyz(1), xyz(2), xyz(3), ...
+                            cov(1,1), cov(2,2), cov(3,3), cov(1,2), cov(1,3), cov(2,3), ...
+                            n_epo, ...
+                            n_obs, ...
+                            s0_ip, ...
+                            s0, ...
+                            fix_ratio, ...
+                            rate, ...
+                            char(coo_type), ...
+                            master_name);
+                    catch ex
+                        % There is an inconsistency with the entry
+                        % could not add this epoch
+                        log.addWarning('There is a corrupted coordinate');
+                    end
+                    % Skip recomputed old epochs
+                    while e <= numel(timestamp) && (abs(cur_time - timestamp(e)) < 1e-5)
+                        e = e + 1;
+                    end
+                end
+                %  Insert old epochs not yet recomputed
+                while e <= numel(timestamp)
+                    old_line = txt(lim(data_start + (e-1),1):lim(data_start + (e-1),2));
+                    str_tmp = sprintf('%s%s\n', str_tmp, old_line);
+                    e = e +1;
+                end
+                fid = fopen(out_file_name, 'Wb');
+                fprintf(fid, str_tmp);
+                fprintf(fid, '+DataEnd\n');
+                fclose(fid);
+                log.addStatusOk(sprintf('Exporting completed successfully'));
+            catch ex
+                Core_Utils.printEx(ex);
+                log.addError(sprintf('Exporting failed'));
+            end
+        end
+
+        function exportAsBerny(this, out_file_name)
+            % Export as CRD and OUT file as Bernese does
+            % Compatibility layer with GeoGuard
+            %
+            % INPUT
+            %   out_file_name      full path of the filename (as default exported into outDir with the name of the coo) 
+            %
+            % SYNTAX
+            %   coo.exportAsBerny(<out_file_name>)
+            %   coo.exportAsBerny(<out_file_name>, new_ref_name, new_fixed_xyz, keep_orphans)
+            
+            now_time = GPS_Time.now();
+            if nargin < 2 || isempty(out_file_name)
+                out_file_name = this.getOutPath();
+            end
+            %remove extension if present
+            [base, fname, fext] = fileparts(out_file_name);
+            if not(exist(base, 'dir'))
+                try
+                    mkdir(base);
+                catch ex
+                    Core_UI.printEx(ex);
+                end
+            end
+            out_file_name = fullfile(base, fname);
+            clear base name ext;
+            
+            log  = Logger.getInstance;
+            log.addMarkedMessage(sprintf('Berny Export to "%s"', [out_file_name, '.crd']));
+            log.addMarkedMessage(sprintf('Berny Export to "%s"', [out_file_name, '.out']));
+            try
+                data_start = 3;
+                if exist([out_file_name, '.crd'], 'file') == 2
+                    % Read and append
+                    [txt_crd, lim_crd] = Core_Utils.readTextFile([out_file_name, '.crd'], 3);
+                    [txt_out, lim_out] = Core_Utils.readTextFile([out_file_name, '.out'], 3);
+                    if isempty(lim_crd)
+                        file_ok = false;
+                        timestamp = [];
+                    else
+                        % Data should be present
+                        file_ok = true;
+                        timestamp = [];
+                        id_len_ok = find(lim_crd(:,3)+1 >= 9);
+                        lim_crd = lim_crd(id_len_ok,:);
+                        try
+                            % Read old timestamps
+                            timestamp = datenum(txt_crd(lim_crd(data_start:end,1) + repmat([16:25 28:36],size(lim_crd,1)-2,1)), 'yyyy-mm-dd HH:MM:SS');
+                        catch
+                            file_ok = false;
+                            timestamp = [];
+                        end
+                    end
+                else
+                    file_ok = false;
+                    timestamp = [];
+                end
+                
+                % Write header OUT
+                str_out = '';
+                str_out = sprintf('%swwww-d yyyy-ddd yyyy-mm-dd s   start    end    n epochs    n C1     n C2     n L1     n L2    RMSCode (m) Rate (s) \n',str_out);
+                str_out = sprintf('%s------+--------+----------+-+--------+--------+---------+--------+--------+--------+--------+------------+--------+\n',str_out);
+                
+                % Write header CRD
+                str_crd = '';
+                str_crd = sprintf('%swwww-d yyyy-ddd yyyy-mm-dd s   start    end    MAST  CRMS        X (m)          Y (m)            Z (m)         EAST (m)       NORTH (m)         UP (m)     F  sE(mm)   sN(mm)   sU(mm)  s3D (mm) \n',str_crd);
+                str_crd = sprintf('%s------+--------+----------+-+--------+--------+----+------+---------------+---------------+---------------+---------------+---------------+---------------+-+--------+--------+--------+--------+\n',str_crd);
+                
+                sol_rate = this.getRate();
+                if isempty(sol_rate) || isnan(zero2nan(sol_rate))
+                    sol_rate = median(diff(this.time.getMatlabTime*86400), 'omitnan');
+                    if isempty(sol_rate) || isnan(sol_rate)
+                        if numel(timestamp) < 2
+                            sol_rate = Core.getState.sss_duration;
+                        else
+                            sol_rate = median(diff(timestamp * 86400), 'omitnan');
+                        end
+                    end
+                end
+                enu = this.getENU;
+                std_enu = this.getStdENU;
+                std_xyz = this.getStdXYZ;
+                
+                % Append New
+                e = 1; % old epoch
+                [~, id_time] = sort(this.time.getMatlabTime);
+                
+                coo_rate = this.getRate;
+                for i = id_time(:)'
+                    cur_time = round(this.time.getEpoch(i).getMatlabTime*86400)/86400;
+                    while e <= numel(timestamp) && ((cur_time - 1e-5) > (timestamp(e) + (sol_rate / 86400)/2))
+                        old_line = txt_crd(lim_crd(data_start + (e-1),1):lim_crd(data_start + (e-1),2));
+                        str_crd = sprintf('%s%s\n', str_crd, old_line);
+                        old_line = txt_out(lim_out(data_start + (e-1),1):lim_out(data_start + (e-1),2));
+                        str_out = sprintf('%s%s\n', str_out, old_line);
+                        e = e +1;
+                    end
+                    try
+                        tmp_time = this.time.getEpoch(i);
+                        
+                        if coo_rate == 86400
+                            sss_char = '0';
+                        else
+                            time_from_start = tmp_time.getMatlabTime;
+                            time_from_start = ((time_from_start - floor(time_from_start)) * 86400); % time from the beginning of the day [s]
+                            sss_char = char('a' + floor(time_from_start/coo_rate));
+                        end
+                        
+                        [year, doy] = tmp_time.getDOY;
+                        [week, sow, dow] = tmp_time.getGpsWeek;
+                        date_str = tmp_time.toString('yyyy-mm-dd');
+                        tmp_time.addIntSeconds(-sol_rate/2);
+                        time_start = tmp_time.toString('HH:MM:SS');
+                        tmp_time.addIntSeconds(+sol_rate-1);
+                        time_stop = tmp_time.toString('HH:MM:SS');
+                        xyz = this.xyz(i,:);
+                        if isempty(this.Cxx)
+                            cov = zeros(3,3);
+                        else
+                            cov = this.Cxx(:,:,i)*1e6;
+                        end
+                        try
+                            n_epo = this.info.n_epo(i);
+                        catch
+                            n_epo = nan;
+                        end
+                        try
+                            n_obs = this.info.n_obs(i);
+                        catch
+                            n_obs = nan;
+                        end
+                        try
+                            fix_ratio = this.info.fixing_ratio(i);
+                        catch
+                            fix_ratio = nan;
+                        end
+                        try
+                            rate = this.info.rate(i);
+                        catch
+                            rate = nan;
+                        end
+                        try
+                            s0_ip = this.info.s0_ip(i);
+                        catch
+                            s0_ip = nan;
+                        end
+                        if s0_ip > 999
+                            s0_ip = 999;
+                        end
+                        try
+                            s0 = this.info.s0(i);
+                        catch
+                            s0 = nan;
+                        end
+                        try
+                            coo_type = char(this.info.coo_type(i));
+                            if coo_type == 'F'
+                                std_enu(i,:) = nan;
+                                std_xyz(i,:) = nan;
+                            end
+                        catch
+                            coo_type = 'U';
+                        end
+                        try
+                            master_name = sprintf('%4s', this.info.master_name(i));
+                        catch
+                            master_name = sprintf('%4s', this.name);
+                        end
+                        master_name = master_name(1:4);
+                        
+                        
+                        
+                        str_crd = sprintf('%s%04d-%1d %04d-%03d %s %c %s %s %4s %6.2f %15.5f %15.5f %15.5f %15.5f %15.5f %15.5f %1c %8.2f %8.2f %8.2f %8.2f\n', str_crd, ...
+                            week,dow, ...
+                            year,doy, ...
+                            date_str, ...
+                            sss_char, ...
+                            time_start, time_stop, ...
+                            master_name, ...
+                            s0_ip, ...
+                            xyz(1), xyz(2), xyz(3), ...
+                            enu(i,1), enu(i,2), enu(i,3), ...
+                            char(coo_type), ...
+                            std_enu(i,1).*1e3, std_enu(i,2).*1e3, std_enu(i,3).*1e3, ...
+                            sqrt(sum(std_xyz(i,:).^2)).*1e3);
+                        str_out = sprintf('%s%04d-%1d %04d-%03d %s %c %s %s %8d  %7d  %7d  %7d  %7d %12.2f %8d\n', str_out, ...
+                            week,dow, ...
+                            year,doy, ...
+                            date_str, ...
+                            sss_char, ...
+                            time_start, time_stop, ...
+                            n_epo, 0, 0, n_obs, 0, ...
+                            s0_ip, ...
+                            rate);
+                    catch ex
+                        % There is an inconsistency with the entry
+                        % could not add this epoch
+                        log.addWarning('There is a corrupted coordinate');
+                    end
+                    % Skip recomputed old epochs
+                    while e <= numel(timestamp) && (abs(cur_time - (timestamp(e) + (sol_rate / 86400)/2)) < 1e-5)
+                        e = e +1;
+                    end
+                end
+                
+                %  Insert old epochs not yet recomputed
+                while e <= numel(timestamp)
+                    old_line = txt_crd(lim_crd(data_start + (e-1),1):lim_crd(data_start + (e-1),2));
+                    str_crd = sprintf('%s%s\n', str_crd, old_line);
+                    old_line = txt_out(lim_out(data_start + (e-1),1):lim_out(data_start + (e-1),2));
+                    str_out = sprintf('%s%s\n', str_out, old_line);
+                    e = e +1;
+                end
+                
+                fid_out = fopen([out_file_name '.out'], 'Wb');
+                fprintf(fid_out, str_out);
+                fclose(fid_out);
+                
+                fid_crd = fopen([out_file_name '.crd'], 'Wb');
+                fprintf(fid_crd, str_crd);
+                fclose(fid_crd);
+                
+                log.addStatusOk(sprintf('Exporting completed successfully'));
+            catch ex
+                Core_Utils.printEx(ex);
+                log.addError(sprintf('Exporting failed'));
+            end
+        end
+    end
+    
+    % =========================================================================
     %    OPERATIONS
     % =========================================================================
     
@@ -1371,6 +2137,113 @@ classdef Coordinates < Exportable & handle
             coo_diff.enu_diff = coo1.getElement(id_ok1).getENU - coo2.getElement(id_ok2).getENU;
             coo_diff.xyz_diff = coo1.getElement(id_ok1).xyz - coo2.getElement(id_ok2).xyz;
             %coo_diff.enu_diff = Coordinates.cart2local(coo1.getElement(id_ok1).getMedianPos.xyz, coo_diff.xyz_diff);
+        end
+        
+        function setNewRef(coo_list, new_ref_name, new_fixed_xyz, keep_orphans)
+            % Fix a coordinate to a new value
+            %
+            % INPUT
+            %   new_ref_name       name of the reference coordinate
+            %   new_fixed_xyz      new coordinate of the reference
+            %   keep_orphans       keep the epoch with master different from the new reference (default)
+            %
+            % SYNTAX
+            %   coo_list.setNewRef(new_ref_name, new_fixed_xyz, keep_orphans);
+            if isnumeric(new_ref_name)
+                new_ref_id = new_ref_name;
+                ref_found = true;
+            else
+                % find the new reference station
+                c = 0;
+                ref_found = false;
+                while (c < numel(coo_list)) && ~ref_found
+                    c = c + 1;
+                    if strcmp(new_ref_name, coo_list(c).name)
+                        ref_found = true;
+                    end
+                end
+                if ~ref_found
+                    Logger.getInstance.addError('New reference marker not found! Changing reference is not possible.')
+                else
+                    new_ref_id = c;
+                end
+            end
+            
+            if ref_found
+                if nargin < 3 || isempty(new_fixed_xyz)
+                    try
+                        rf = Core.getReferenceFrame;
+                        new_fixed_xyz = rf.getCoo('GUS3', coo_list(new_ref_id).time.last); % fix to the last coordinate in RF
+                    catch
+                        % any problem with the RF is managed by using median coordinates
+                        new_fixed_xyz = [];
+                    end
+                    if isempty(new_fixed_xyz)
+                        % if empty fix to the median value
+                        new_fixed_xyz = coo_list(new_ref_id).getMedianPos.getXYZ;
+                    end
+                end
+                
+                new_ref_name = categorical({coo_list(new_ref_id).name});
+                
+                coo_rate = round(coo_list(new_ref_id).getRate, 3);
+                if isempty(coo_rate) || isnan(zero2nan(coo_rate))
+                    % try to retrieve rate from the date
+                    coo_rate = round(median(diff(coo_list(new_ref_id).time.getRefTime), 'omitnan'), 3);
+                end
+                if isnan(coo_rate)
+                    coo_rate = 1;
+                end
+                time_ref = coo_list(new_ref_id).time.getRoundedTime(coo_rate);
+                time0 = time_ref.first.getMatlabTime;
+                tid_ref = time_ref.getRefTime(time0) / coo_rate;
+                if any(time0)
+                    xyz_corr = round(repmat(new_fixed_xyz, numel(tid_ref), 1) - coo_list(new_ref_id).xyz, 6);
+                    
+                    % for each non reference coordinate
+                    for c = setdiff(1 : numel(coo_list), new_ref_id)
+                        tid_coo = coo_list(c).time.getRoundedTime(coo_rate).getRefTime(time0)/coo_rate;
+                        [~, idc, idr] = intersect(tid_coo, tid_ref);
+                        if any(idc)
+                            % apply translation
+                            coo_list(c).xyz(idc, :) = coo_list(c).xyz(idc, :) + xyz_corr(idr, :);
+                            % Covariance propagation with missing cross covariance term
+                            
+                            vcv_ref = coo_list(new_ref_id).Cxx(:, :, idr);
+                            if isempty(vcv_ref)
+                                vcv_ref = zeros(3);
+                            end
+                            vcv = coo_list(c).Cxx(:, :, idc);
+                            if isempty(vcv)
+                                vcv = nan(3);
+                            end
+                            if isempty(coo_list(c).Cxx)
+                                coo_list(c).Cxx = nan(3, 3, idc(end));
+                            end
+                            coo_list(c).Cxx(:, :, idc) = vcv + vcv_ref;
+                            coo_list(c).info.master_name(idc) = new_ref_name;
+                            coo_list(c).info.coo_type(idc) = 'G';
+                            
+                            % remove epochs with no master
+                            if nargin > 3 && not(keep_orphans)
+                                id_ko = setdiff((1:coo_list(c).time.length)', idc);
+                                coo_list(c).rem(id_ko);
+                            end
+                        end
+                    end
+                    
+                    % Now fix the new reference
+                    coo_list(new_ref_id).xyz = repmat(new_fixed_xyz, numel(tid_ref), 1);
+                    coo_list(new_ref_id).info.master_name(:) = new_ref_name;
+                    coo_list(new_ref_id).info.coo_type(:) = 'F';
+                    coo_list(new_ref_id).Cxx(:) = 0;
+                else
+                    Logger.getInstance.addError('Reference is missing, loosing all the coordinates');
+                    for c = setdiff(1 : numel(coo_list), new_ref_id)
+                        coo_list(c).rem(1:size(coo_list(c).xyz,1));
+                    end
+                end
+            end
         end
     end
         
